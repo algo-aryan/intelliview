@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IntelliView: AI-Powered Mock Interview Platform</title>
+  <link rel="stylesheet" href="/static/css/interview.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+  <!-- Background Pattern -->
+  <div class="background-pattern"></div>
+
+  <!-- Loading Overlay -->
+  <div class="loading-overlay" id="loading-overlay">
+    <div class="loading-content">
+      <div class="spinner"></div>
+      <div class="loading-message" id="loading-message">Loading...</div>
+    </div>
+  </div>
+
+  <!-- Navbar -->
+  <nav class="navbar">
+    <div class="navbar-container">
+      <div class="navbar-inner">
+        <a href="/" class="logo">
+          <div class="logo-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M12 2L13.09 8.26L20 9L13.09 9.74L12 16L10.91 9.74L4 9L10.91 8.26L12 2Z" fill="currentColor"/>
+            </svg>
+          </div>
+          <span class="logo-text">IntelliView</span>
+        </a>
+        
+        <div class="navbar-right">
+          <div class="nav-links">
+            <a href="/" class="nav-link">Home</a>
+            <a href="/interview" class="nav-link active">Interview</a>
+            <a href="/ats_score" class="nav-link">ATS Score</a>
+            <a href="/history" class="nav-link">History</a>
+            <a href="/settings" class="nav-link">Settings</a>
+          </div>
+          
+          <div class="nav-divider"></div>
+          
+          <!-- Google Auth Profile Section -->
+          <div class="profile-section">
+            {% if session['user'] %}
+            <a href="/profile" class="profile-link">
+              <img src="{{ session['user'].avatar_url }}" alt="Profile" class="profile-avatar">
+              <span>Profile</span>
+            </a>
+            {% else %}
+            <a href="/auth/login" class="profile-link">
+              <div class="profile-icon">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M12 12C14.21 12 16 10.21 16 8C16 5.79 14.21 4 12 4C9.79 4 8 5.79 8 8C8 10.21 9.79 12 12 12ZM12 14C9.33 14 4 15.34 4 18V20H20V18C20 15.34 14.67 14 12 14Z" fill="currentColor"/>
+                </svg>
+              </div>
+              <span>Login</span>
+            </a>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Main Content -->
+  <main class="main-content">
+    <div class="content-container">
+      <section class="form-section">
+        <div class="form-header">
+          <div class="header-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M12 2L13.09 8.26L20 9L13.09 9.74L12 16L10.91 9.74L4 9L10.91 8.26L12 2Z" fill="currentColor"/>
+            </svg>
+          </div>
+          <h2 class="form-title">Interview Success Made Simple</h2>
+          <p class="form-subtitle">
+            While others practice generic questions, you'll master the exact scenarios hiring managers will ask based on your background and their job requirements.
+          </p>
+        </div>
+
+        <form id="interview-form" enctype="multipart/form-data" class="job-application-form">
+          <!-- Step 1: Job Description -->
+          <div class="form-step">
+            <div class="form-group">
+              <label for="job-description" class="form-label">
+                <div class="step-indicator">
+                  <span class="step-number">1</span>
+                </div>
+                <div class="label-content">
+                  <span class="label-title">Job Description</span>
+                  <span class="label-subtitle">Paste the complete job posting here</span>
+                </div>
+              </label>
+              <div class="input-wrapper">
+                <textarea 
+                  id="job-description" 
+                  name="job_description" 
+                  rows="6" 
+                  placeholder="Paste the job description here..." 
+                  required 
+                  class="form-control"
+                ></textarea>
+              </div>
+            </div>
+          </div>
+
+          <!-- Step 2: Resume Upload -->
+          <div class="form-step">
+            <div class="form-group">
+              <label for="resume" class="form-label">
+                <div class="step-indicator">
+                  <span class="step-number">2</span>
+                </div>
+                <div class="label-content">
+                  <span class="label-title">Upload Resume</span>
+                  <span class="label-subtitle">PDF format, maximum 5MB</span>
+                </div>
+              </label>
+              <input type="file" id="resume" name="resume" accept=".pdf" required hidden>
+              <div class="file-upload" onclick="document.getElementById('resume').click();">
+                <div class="file-upload-icon">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z" fill="currentColor"/>
+                  </svg>
+                </div>
+                <div class="file-upload-content">
+                  <span class="file-upload-text">Click to upload resume</span>
+                  <span id="file-name" class="file-name">No file chosen</span>
+                </div>
+                <div class="file-upload-button">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z" fill="currentColor"/>
+                  </svg>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Step 3: Interview Type -->
+          <div class="form-step">
+            <div class="form-group">
+              <label for="interview-type" class="form-label">
+                <div class="step-indicator">
+                  <span class="step-number">3</span>
+                </div>
+                <div class="label-content">
+                  <span class="label-title">Interview Type</span>
+                  <span class="label-subtitle">Choose your preferred interview style</span>
+                </div>
+              </label>
+              <div class="select-wrapper">
+                <select id="interview-type" name="interview_type" required class="form-control">
+                  <option value="" disabled selected>Select an interview type</option>
+                  <option value="technical">Technical Interview</option>
+                  <option value="behavioral">Behavioral Interview</option>
+                  <option value="common-questions">Common Questions</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- Submit Button -->
+          <button type="submit" class="cta-button">
+            <span class="button-text">Start Interview</span>
+            <div class="button-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M8,5.14V19.14L19,12.14L8,5.14Z" fill="currentColor"/>
+              </svg>
+            </div>
+          </button>
+        </form>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    // JS code remains unchanged
+    const messages = [
+      "Parsing resume...",
+      "Understanding job role...",
+      "Preparing questions...",
+      "Finalizing interview setup...",
+      "Almost there...",
+      "Ready to start your interview!",
+      "Good luck!",
+      "You got this!",
+      "IntelliView is here to help you shine!",
+      "Let's ace this interview together!",
+      "Your success is our mission!",
+      "IntelliView: Your AI-powered interview partner!",
+      "Interview preparation made easy!",
+    ];
+
+    document.getElementById('resume').addEventListener('change', function () {
+      const fileName = this.files[0] ? this.files[0].name : 'No file chosen';
+      document.getElementById('file-name').textContent = fileName;
+    });
+
+    document.getElementById('interview-form').addEventListener('submit', function (e) {
+      e.preventDefault();
+      const overlay = document.getElementById('loading-overlay');
+      const messageElement = document.getElementById('loading-message');
+      overlay.style.display = 'flex';
+      let index = 0;
+      messageElement.textContent = messages[index];
+      const interval = setInterval(() => {
+        index++;
+        if (index >= messages.length) {
+          clearInterval(interval);
+        } else {
+          messageElement.textContent = messages[index];
+        }
+      }, 2000);
+      const formData = new FormData(this);
+      fetch('/api/v1/create-interview', {
+        method: 'POST',
+        body: formData,
+      })
+        .then(response => {
+          if (response.redirected) {
+            window.location.href = response.url;
+          } else {
+            return response.json().then(data => {
+              if (!response.ok) {
+                throw new Error(data.message || 'Something went wrong');
+              }
+              return data;
+            });
+          }
+        })
+        .catch(error => {
+          console.error('Error:', error);
+          overlay.style.display = 'none';
+          alert('Error: ' + error.message);
+        });
+    });
+  </script>
+</body>
+</html>

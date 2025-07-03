@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Interview - IntelliView</title>
+  <link rel="stylesheet" href="/static/css/take-interview.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+    rel="stylesheet">
+</head>
+
+<body>
+  <nav class="navbar">
+    <div class="navbar-container">
+      <div class="navbar-inner">
+        <a href="/" class="logo">
+          <div class="logo-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M12 2L13.09 8.26L20 9L13.09 9.74L12 16L10.91 9.74L4 9L10.91 8.26L12 2Z" fill="currentColor" />
+            </svg>
+          </div>
+          <span class="logo-text">IntelliView</span>
+        </a>
+
+        <div class="navbar-right">
+          <div class="nav-links">
+            <a href="/" class="nav-link">Home</a>
+            <a href="/interview" class="nav-link">Interview</a>
+            <a href="/ats_score" class="nav-link">ATS Score</a>
+            <a href="/history" class="nav-link active">History</a>
+            <a href="/settings" class="nav-link">Settings</a>
+          </div>
+
+          <div class="nav-divider"></div>
+
+          <!-- Google Auth Profile Section -->
+          <div class="profile-section">
+            {% if session['user'] %}
+            <a href="/profile" class="profile-link">
+              <img src="{{ session['user'].avatar_url }}" alt="Profile" class="profile-avatar">
+              <span>Profile</span>
+            </a>
+            {% else %}
+            <div id="g_id_onload" data-client_id="688599391698-e5vvucpglgu75j68dsmuesjtpvps9jjt.apps.googleusercontent.com" data-callback="handleCredentialResponse"
+              data-auto_prompt="false">
+            </div>
+            <div class="g_id_signin" data-type="standard" data-shape="pill" data-theme="outline"
+              data-text="sign_in_with" data-size="medium" data-logo_alignment="left">
+            </div>
+
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <div class="container">
+    <div class="left-container">
+      <div class="interview-header">
+        <h1>Interview in Progress (<span id="timer">00:00</span>)</h1>
+      </div>
+
+      <div class="question-section">
+        <div class="question-tag">
+          <p class="tag">Question 1</p>
+        </div>
+        <p class="question" id="current-question"><strong>Question</strong>: Preparing your next challenge...</p>
+      </div>
+
+      <div class="video-container">
+        <video id="video" autoplay></video>
+        <div class="video-overlay">
+          <div class="tags-emotion"><span id="emotion-value">Emotion: </span></div>
+          <div class="tags-posture"><span id="posture-value">Posture: </span></div>
+        </div>
+      </div>
+
+      <div class="answer-container">
+        <div class="answer-box">
+          <textarea id="answer" rows="4" placeholder="Type your answer here"
+            class="form-control"></textarea>
+          <div class="button-container">
+            <button class="end-button btn btn--secondary" id="end-interview">End Interview</button>
+            <button id="submit-answer" class="submit-button btn btn--primary">Submit</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="right-container">
+      <navigator class="analysis-navigator">
+        <p id="feedback" onclick="toggleFeedback(true)" class="nav-tab">Feedback</p>
+        <p id="analysis-realtime" onclick="toggleFeedback(false)" class="nav-tab nav-tab--active">Real-time Analysis</p>
+      </navigator>
+
+      <div class="analysis-realtime" style="display: flex;">
+        <div class="analysis-report">
+          <div class="analysis-report-item">
+            <p class="analysis-report-label">Body Language:</p>
+            <p id="body-language-value" class="analysis-report-value">Analyzing...</p>
+          </div>
+          <div class="analysis-report-item">
+            <p class="analysis-report-label">Eye Contact:</p>
+            <p id="eye-contact-value" class="analysis-report-value">Analyzing...</p>
+          </div>
+          <div class="analysis-report-item">
+            <p class="analysis-report-label">Gestures:</p>
+            <p id="gestures-value" class="analysis-report-value">Analyzing...</p>
+          </div>
+          <!-- <div class="analysis-report-item">
+            <p class="analysis-report-label">Movement:</p>
+            <p id="movement-value" class="analysis-report-value">Analyzing...</p>
+          </div> -->
+          <div class="analysis-report-item">
+            <p class="analysis-report-label">Overall Impression:</p>
+            <p id="overall-impression-value" class="analysis-report-value">Analyzing...</p>
+          </div>
+          <div class="analysis-report-item">
+            <p class="analysis-report-label">Suggestions for Improvement:</p>
+            <p id="suggestions-value" class="analysis-report-value">Analyzing...</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="feedback-container" style="display: none;"></div>
+    </div>
+  </div>
+
+  <script>
+    // Get identifier from URL (e.g., /interview/<identifier> or /mock-interview/<identifier>)
+    let identifier = window.location.pathname.split('/').pop();
+    if (identifier === 'interview' || identifier === 'mock-interview') { // Handle cases where path is just /interview or /mock-interview
+      // This means the page was accessed without a specific ID, likely indicating an error or redirection issue
+      // You might want to handle this more gracefully, e.g., redirect to an error page or the main interview creation page.
+      // For now, setting a placeholder or causing an obvious error for debugging.
+      console.error("No interview identifier found in URL. Using a placeholder.");
+      identifier = 'placeholder-interview-id';
+    }
+
+
+    let questions = []; // Initialize as empty, will be populated by fetch
+    let question_number = 1; // This variable seems to be for display purposes (Question 1, Question 2, etc.)
+    let timerInterval;
+    let startTime = Date.now();
+    let video = document.getElementById('video');
+    let timerDisplay = document.getElementById('timer');
+    let interviewBehavior = [];
+    let interviewHistory = []; // This seems to be client-side only; assume main.py handles DB history
+    let currentQuestionIndex = 0; // Keep track of the current question index
+
+    // Get references to the buttons and answer textarea
+    const submitButton = document.getElementById('submit-answer');
+    const endInterviewButton = document.getElementById('end-interview'); // Correct ID for End Interview button
+    const answerTextarea = document.getElementById('answer');
+
+
+    function toggleFeedback(isFeedback) {
+      document.querySelector('.analysis-realtime').style.display = isFeedback ? 'none' : 'flex';
+      document.querySelector('.feedback-container').style.display = isFeedback ? 'flex' : 'none';
+
+      // Update active tab styles
+      document.getElementById('feedback').classList.toggle('active', isFeedback);
+      document.getElementById('analysis-realtime').classList.toggle('active', !isFeedback);
+    }
+    // Set initial active tab
+    document.addEventListener('DOMContentLoaded', () => {
+      toggleFeedback(false); // Default to Real-time Analysis view
+    });
+
+
+    function startTimer() {
+      timerInterval = setInterval(() => {
+        let elapsed = Date.now() - startTime;
+        let m = Math.floor((elapsed / 1000 / 60) % 60).toString().padStart(2, '0');
+        let s = Math.floor((elapsed / 1000) % 60).toString().padStart(2, '0');
+        timerDisplay.textContent = `${m}:${s}`;
+      }, 1000);
+    }
+
+    navigator.mediaDevices.getUserMedia({ video: true })
+      .then(stream => video.srcObject = stream)
+      .catch(error => console.error('Error accessing webcam:', error));
+
+    // Function to update the displayed question and manage button visibility
+    function updateQuestion() {
+      const questionElement = document.getElementById('current-question');
+      if (questions.length > 0) {
+        questionElement.innerHTML = `<strong>Question</strong>: ${questions[currentQuestionIndex]}`;
+      } else {
+        questionElement.innerHTML = `<strong>Question</strong>: No questions loaded.`;
+      }
+
+      // Update question number for display (e.g., Question 1, Question 2)
+      document.querySelector('.question-tag .tag').textContent = `Question ${currentQuestionIndex + 1}`;
+
+
+      // Manage button visibility
+      if (currentQuestionIndex === questions.length - 1 && questions.length > 0) {
+        // It's the last question
+        submitButton.style.display = 'none'; // Hide Submit Answer
+        endInterviewButton.style.display = 'block'; // Show End Interview
+      } else {
+        // Not the last question or no questions loaded
+        submitButton.style.display = 'block'; // Show Submit Answer
+        endInterviewButton.style.display = 'none'; // Hide End Interview
+      }
+    }
+
+    // Consolidated event listener for the Submit Answer button (for intermediate questions)
+    // This listener handles both text input and integrates speech recognition stopping.
+    submitButton.addEventListener('click', async () => {
+      if (isListening) { // If speech recognition is active, stop it
+        recognition.stop();
+        isListening = false;
+      }
+
+      const userAnswer = answerTextarea.value.trim();
+
+      if (userAnswer === "") {
+        alert("Please type your answer before submitting.");
+        return;
+      }
+
+      // Send the answer to the backend
+      try {
+        const response = await fetch('/submit-answer', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            interview_id: identifier,
+            question_index: currentQuestionIndex,
+            user_answer: userAnswer
+          }),
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+          console.log('Answer submitted successfully:', data.message);
+          answerTextarea.value = ''; // Clear the textarea after submission
+
+          // IMPORTANT: Ensure the backend's /submit-answer updates interview_history in DB
+          // and if it returns `follow_up_question` as per the old logic:
+          if (data.follow_up_question && questions.length < 5) { // Limit to 5 questions as per initial logic
+            questions.push(data.follow_up_question);
+          }
+          // If backend returns updated history/feedback directly, you might process it here
+          // For now, assuming feedback rendering happens separately or on history page
+
+          currentQuestionIndex++; // Move to the next question
+          updateQuestion(); // Update UI and button visibility
+
+        } else {
+          console.error('Error submitting answer:', data.message);
+          alert('Failed to submit answer: ' + data.message);
+        }
+      } catch (error) {
+        console.error('Network error submitting answer:', error);
+        alert('A network error occurred while submitting your answer.');
+      }
+    });
+
+
+    // Speech Recognition setup (kept separate for clarity, but integrated with submitButton click)
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'en-US';
+    recognition.interimResults = true;
+    recognition.continuous = true;
+    recognition.maxAlternatives = 1;
+    let isListening = false; // Moved here for better scope
+
+    recognition.onresult = e => {
+      let transcript = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) transcript += e.results[i][0].transcript + ' ';
+      }
+      document.getElementById('answer').value += transcript;
+    };
+
+    recognition.onend = () => {
+      if (isListening) { // Only restart if explicitly still listening
+        recognition.start();
+      }
+    };
+
+    recognition.onerror = (event) => {
+      console.error('Speech recognition error:', event.error);
+      if (event.error === 'not-allowed' || event.error === 'permission-denied') {
+        alert('Microphone access denied. Please allow microphone access in your browser settings to use speech-to-text.');
+      }
+      isListening = false; // Stop trying to listen
+    };
+
+    // Assuming there's a way to start speech recognition (e.g., a mic button),
+    // its event listener would set isListening = true and call recognition.start();
+    // For now, no specific button for mic is shown in HTML, so keeping it
+    // as it was in the original snippet, assuming it's part of another control.
+
+
+    // Event listener for the End Interview button
+    endInterviewButton.addEventListener('click', async () => {
+      if (isListening) { // If speech recognition is active, stop it
+        recognition.stop();
+        isListening = false;
+      }
+
+      const userAnswer = answerTextarea.value.trim(); // Get the answer for the very last question
+
+      if (userAnswer === "") {
+        alert("Please type your answer for the last question before ending the interview.");
+        return;
+      }
+
+      // First, submit the answer for the last question
+      try {
+        const submitLastAnswerResponse = await fetch('/submit-answer', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            interview_id: identifier,
+            question_index: currentQuestionIndex,
+            user_answer: userAnswer
+          }),
+        });
+
+        const submitLastAnswerData = await submitLastAnswerResponse.json();
+
+        if (!submitLastAnswerResponse.ok) {
+          console.error('Error submitting last answer:', submitLastAnswerData.message);
+          alert('Failed to submit last answer: ' + submitLastAnswerData.message);
+          return; // Stop here if last answer submission fails
+        }
+        console.log('Last answer submitted successfully:', submitLastAnswerData.message);
+        answerTextarea.value = ''; // Clear the textarea
+
+        // Now, make the /end-interview call to mark it as completed and potentially generate final report
+        clearInterval(timerInterval); // Stop the timer
+
+        const endInterviewResponse = await fetch('/end-interview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            interview_history: interviewHistory, // If this is for client-side display, otherwise remove
+            identifier: identifier,
+            behavior_analysis: interviewBehavior,
+            timer: timerDisplay.textContent
+          })
+        });
+
+        if (endInterviewResponse.ok) {
+          console.log("Interview marked as completed successfully. Redirecting to report...");
+          window.location.href = `/history/${identifier}`;
+        } else {
+          const endInterviewData = await endInterviewResponse.json();
+          console.error('Failed to end interview:', endInterviewData.message);
+          alert('Failed to end interview: ' + endInterviewData.message);
+        }
+      } catch (error) {
+        console.error('Network error during end interview process:', error);
+        alert('A network error occurred while ending the interview.');
+      }
+    });
+
+
+    function renderFeedback() {
+      const container = document.querySelector('.feedback-container');
+      container.innerHTML = '';
+      // Ensure interviewHistory is being populated correctly if used for client-side feedback
+      // This part might need adjustment depending on how your /submit-answer returns data.
+      interviewHistory.forEach((item, i) => {
+        const div = document.createElement('div');
+        div.classList.add('feedback-item');
+        const aiReportContent = typeof item.ai_report === 'object'
+          ? JSON.stringify(item.ai_report, null, 2)
+          : (item.ai_report || 'No feedback available');
+        div.innerHTML = `<strong>Q${i + 1}:</strong> ${item.question}<br><strong>A:</strong> ${item.answer}<br><br><strong>AI Report:</strong><pre>${aiReportContent}</pre>`;
+        container.appendChild(div);
+      });
+    }
+
+    // Updated sendScreencapture function with 500 ms delay and no intermediate screenshot display
+    function sendScreencapture() {
+      if (!video || !video.videoWidth || !video.videoHeight) {
+        console.warn("Video stream not ready for screencapture.");
+        return;
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob(blob => {
+        if (!blob) {
+          console.error("Failed to create blob from canvas.");
+          return;
+        }
+        const formData = new FormData();
+        formData.append('screencapture', blob);
+        formData.append('identifier', identifier);
+
+        fetch('/upload-screencapture', {
+          method: 'POST',
+          body: formData
+        })
+          .then(res => {
+            if (!res.ok) {
+              console.error(`Screencapture upload failed: ${res.status} ${res.statusText}`);
+              return res.text().then(text => Promise.reject(new Error(text)));
+            }
+            return res.json();
+          })
+          .then(data => {
+            if (data.analysis_report) {
+              const ar = data.analysis_report;
+              // Delay updating the UI by 500 ms
+              setTimeout(() => {
+                document.getElementById('emotion-value').textContent = `Emotion: ${ar.emotion_analysis}`;
+                document.getElementById('posture-value').textContent = `Posture: ${ar.posture_analysis}`;
+                document.getElementById('body-language-value').textContent = `Body Language: ${ar.body_language_analysis}`;
+                document.getElementById('eye-contact-value').textContent = `Eye Contact: ${ar.eye_contact_analysis}`;
+                document.getElementById('gestures-value').textContent = `Gestures: ${ar.gestures_analysis}`;
+                document.getElementById('overall-impression-value').textContent = `Overall Impression: ${ar.overall_impression}`;
+                document.getElementById('suggestions-value').textContent = `Suggestions: ${ar.suggestions_for_improvement}`;
+              }, 500);
+              interviewBehavior.push(ar);
+            } else {
+              console.warn("Analysis report missing from screencapture response.");
+            }
+          })
+          .catch(error => {
+            console.error('Error sending screencapture:', error);
+          });
+      }, 'image/jpeg', 0.8);
+    }
+
+    // Start polling every 10 seconds without showing any screenshot preview
+    setInterval(sendScreencapture, 10000);
+
+
+    // Initial fetch to load questions when the page loads
+    fetch(`/get-questions?id=${identifier}`)
+      .then(res => {
+        if (!res.ok) {
+          console.error(`Failed to load questions: ${res.status} ${res.statusText}`);
+          return { questions: ["Failed to load questions. Please try again or refresh."] };
+        }
+        return res.json();
+      })
+      .then(data => {
+        questions = data.questions || ["Tell me about yourself."];
+        startTimer();
+        updateQuestion(); // Initial display of the first question and button setup
+      })
+      .catch(error => {
+        console.error('Error fetching initial questions:', error);
+        questions = ["Error loading questions. Please check your connection."];
+        startTimer();
+        updateQuestion();
+      });
+  </script>
+</body>
+
+</html>
