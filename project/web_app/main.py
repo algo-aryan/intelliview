@@ -241,7 +241,11 @@ app.register_blueprint(ats_bp)
 # --------------------- Routes ----------------------
 @app.route("/")
 def index():
-    return render_template("index.html")
+    try:
+        return "✅ Hello from IntelliView!"
+    except Exception as e:
+        print(f"⚠️ Error in index(): {e}")
+        return "Internal Server Error", 500
 
 @app.route('/profile')
 def profile():
@@ -1454,5 +1458,5 @@ def interview_results(identifier):
     )
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))  # Render provides PORT env var
+    port = int(os.environ.get("PORT", 8000))  # Render provides PORT env var
     app.run(host="0.0.0.0", port=port)
