@@ -241,11 +241,7 @@ app.register_blueprint(ats_bp)
 # --------------------- Routes ----------------------
 @app.route("/")
 def index():
-    try:
-        return "✅ Hello from IntelliView!"
-    except Exception as e:
-        print(f"⚠️ Error in index(): {e}")
-        return "Internal Server Error", 500
+    return render_template("index.html")
 
 @app.route('/profile')
 def profile():
@@ -1458,5 +1454,6 @@ def interview_results(identifier):
     )
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))  # Render provides PORT env var
-    app.run(host="0.0.0.0", port=port)
+    port = int(os.environ.get("PORT", 8000))
+    print(f"🟢 Starting Flask on port {port}", flush=True)
+    app.run(host="0.0.0.0", port=port, debug=True)
