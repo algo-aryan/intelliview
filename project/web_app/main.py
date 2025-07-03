@@ -75,18 +75,24 @@ genai.configure(api_key=gemini_api_key)
 # -------------------------------------------------------------
 #  Lazy load heavy models once before first request
 # -------------------------------------------------------------
-@app.before_first_request
-def load_models_once():
-    global emotion_detector, pose_detector
-    # 1) FER emotion detector
-    emotion_detector = FER(mtcnn=True)
-    # 2) MediaPipe Pose detector
-    mp_pose = mp.solutions.pose
-    pose_detector = mp_pose.Pose(
-        min_detection_confidence=0.5,
-        min_tracking_confidence=0.5
-    )
-    print("✅ Loaded FER emotion_detector and MediaPipe pose_detector")
+# Lazy-load heavy models once per worker, on first request
+emotion_detector = None
+pose_detector = None
+_models_loaded = False
+
+@app.before_request
+def _load_models_once():
+    global emotion_detector, pose_detector, _models_loaded
+    if not _models_loaded:
+        emotion_detector = FER(mtcnn=True)
+        mp_pose = mp.solutions.pose
+        pose_detector = mp_pose.Pose(
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5
+        )
+        _models_loaded = True
+        print("✅ Lazy-loaded FER emotion_detector and MediaPipe pose_detector")
+
 
 # -------------------------------------------------------------
 #  ATS Blueprint
@@ -163,11 +169,22 @@ def ats_score():
 
     try:
         clean_response = gemini_response
-        if '```
-            clean_response = clean_response.split('```json',1)[1].split('```
+        if '```json' in clean_response:
+            try:
+                clean_response = clean_response.split('```json', 1)[1].split('```', 1)[0].strip()
+            except IndexError:
+                clean_response = "{}"  # fallback to empty JSON object if something goes wrong
         elif '```' in clean_response:
-            clean_response = clean_response.split('``````',1)[0].strip()
-        parsed_data = json.loads(clean_response)
+            try:
+                clean_response = clean_response.split('```', 1)[1].split('```', 1)[0].strip()
+            except IndexError:
+                clean_response = "{}"
+
+        try:
+            parsed_data = json.loads(clean_response)
+        except json.JSONDecodeError:
+            parsed_data = {}
+
         return jsonify({
             'score': parsed_data.get('score', 0),
             'summary': parsed_data.get('summary', 'Analysis completed.'),
