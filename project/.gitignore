@@ -5,20 +5,19 @@ env*/
 
 # Byte-compiled files
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
-*~
-
-# Local IDE settings
-.vscode/
-.idea/
 
 # OS files
 .DS_Store
 Thumbs.db
 
-# Node modules (if any)
-node_modules/
+# IDE/editor files
+.vscode/
+.idea/
 
-# Git LFS placeholder (if you use LFS)
-*.bin filter=lfs diff=lfs merge=lfs -text
+# Logs
+*.log
+
+# Node modules (if applicable)
+node_modules/
