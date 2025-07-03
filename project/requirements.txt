@@ -52,8 +52,8 @@ proto-plus==1.26.1
 protobuf==4.25.3
 grpcio==1.62.3
 grpcio-status==1.62.3
-moviepy==1.0.3
-tensorflow-macos==2.15.0
+moviepy
+tensorflow==2.15.0
 
 # Flask Utilities & Compat
 absl-py==2.3.0
