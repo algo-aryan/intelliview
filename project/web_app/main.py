@@ -122,7 +122,7 @@ def extract_text_from_pdf_with_gemini(pdf_content):
     except Exception as e:
         print(f"Error extracting text from PDF with Gemini: {e}")
         return None
-
+ 
 def get_ats_score_with_gemini(resume_text):
     """Get ATS score using Gemini AI"""
     try:
@@ -1452,6 +1452,7 @@ def interview_results(identifier):
         interview=interview,
         duration=duration_str
     )
-    
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    port = int(os.environ.get("PORT", 5000))  # Render provides PORT env var
+    app.run(host="0.0.0.0", port=port)
