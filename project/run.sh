@@ -7,8 +7,8 @@ echo "Render PORT environment variable is: $PORT"
 
 cd web_app
 
-# Replace this shell with Gunicorn, binding to 0.0.0.0 on the assigned port.
-exec gunicorn main:app \
+# Replace this shell with Gunicorn, binding immediately on the assigned port.
+exec python3 -m gunicorn main:app \
   --bind 0.0.0.0:"${PORT:-10000}" \
   --workers 1 \
   --timeout 120 \
