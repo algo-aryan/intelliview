@@ -1,97 +1,96 @@
 import os
-from flask import Flask, request, session, redirect, url_for, render_template, jsonify
+import secrets
+import random
+import json
+import textwrap
+from datetime import datetime, timedelta
+
+import cv2
+import numpy as np
+import requests
+import google.generativeai as genai
+from google.oauth2 import id_token
+from google.auth.transport import requests as grequests
+from flask import (
+    Flask, request, session, redirect, url_for,
+    render_template, jsonify, Blueprint
+)
 from flask_session import Session
 from pymongo import MongoClient
 import redis
 from dotenv import load_dotenv
-import secrets
-from datetime import datetime, timedelta # Import timedelta for potential time calculations
-import google.generativeai as genai
-from google.oauth2 import id_token
-from google.auth.transport import requests as grequests
-import requests
-import json
-import cv2
-import mediapipe as mp
-from datetime import datetime
-import numpy as np
-import random # For mock data generation
-import textwrap
-from fer import FER
-emotion_detector = FER(mtcnn=True)
+from fer import FER  # keep import here for type reference; instance created later
+import mediapipe as mp  # same as above
 
-# Load environment variables
+# -------------------------------------------------------------
+#  Lazy-load model placeholders
+# -------------------------------------------------------------
+emotion_detector = None
+pose_detector = None
+
+# -------------------------------------------------------------
+#  Flask app setup
+# -------------------------------------------------------------
 load_dotenv()
-
-AZURE_FACE_API_ENDPOINT = os.getenv("AZURE_FACE_API_ENDPOINT")
-AZURE_FACE_API_KEY = os.getenv("AZURE_FACE_API_KEY")
-
-
-# Gemini API Key
-gemini_api_key = os.getenv("GEMINI_API_KEY")
-if not gemini_api_key:
-    # Use the provided key if not set in environment
-    gemini_api_key = 'AIzaSyA2Mi4IjnQf4TJ5FQyO3p21njnN7PRmDyg' # Using a placeholder for demonstration
-    print("Warning: GEMINI_API_KEY not found in environment, using default.")
-
-# Configure Gemini
-genai.configure(api_key=gemini_api_key)
-
 app = Flask(__name__)
 
-# Secret Key
-app.config["SECRET_KEY"] = os.getenv("SECRET_KEY")
-if not app.config["SECRET_KEY"]:
-    # Use the provided key if not set in environment
-    app.config["SECRET_KEY"] = 'c13997a18de853c9ce6e4226a53536c1' # Using a placeholder for demonstration
-    print("Warning: SECRET_KEY not found in environment, using default.")
+# Secret key
+app.config["SECRET_KEY"] = os.getenv("SECRET_KEY") or 'c13997a18de853c9ce6e4226a53536c1'
+print("Warning: SECRET_KEY not found in environment, using default.") if not os.getenv("SECRET_KEY") else None
 
-# Session Configuration
-redis_url = os.getenv("REDIS_URL")
-if not redis_url:
-    # Use the provided URL if not set in environment
-    redis_url = 'rediss://red-d1iadk6r433s73a8qiv0:vZC5vfKvFm2f0vCmG2F7gZUfCMSc4iO6@oregon-keyvalue.render.com:6379' # Using a placeholder for demonstration
-    print("Warning: REDIS_URL not found in environment, using default.")
-
+# Session
+redis_url = os.getenv("REDIS_URL") or 'rediss://red-d1iadk6r433s73a8qiv0:vZC5vfKvFm2f0vCmG2F7gZUfCMSc4iO6@oregon-keyvalue.render.com:6379'
+print("Warning: REDIS_URL not found in environment, using default.") if not os.getenv("REDIS_URL") else None
 app.config["SESSION_TYPE"] = "redis"
 app.config["SESSION_REDIS"] = redis.from_url(redis_url)
 if os.getenv("FLASK_ENV") == "development":
-    app.config["SESSION_COOKIE_SECURE"] = False  # Required for localhost HTTP
-
-app.config["SESSION_COOKIE_HTTPONLY"] = True
-app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-app.config["SESSION_COOKIE_NAME"] = "interview-session"
-
-# Initialize Session
+    app.config.update(
+        SESSION_COOKIE_SECURE=False,
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE="Lax",
+        SESSION_COOKIE_NAME="interview-session"
+    )
 Session(app)
 
-# MongoDB Connection
-mongodb_url = os.getenv("MONGO_URI")
-if not mongodb_url:
-    # Use the provided URL if not set in environment
-    mongodb_url = 'mongodb+srv://aryanbansal:aryan1234@intelliview.lbxflf8.mongodb.net/intelliview?retryWrites=true&w=majority' # Using a placeholder for demonstration
-    print("Warning: MONGO_URI not found in environment, using default.")
-
+# MongoDB
+mongodb_url = os.getenv("MONGO_URI") or 'mongodb+srv://aryanbansal:aryan1234@intelliview.lbxflf8.mongodb.net/intelliview?retryWrites=true&amp;w=majority'
+print("Warning: MONGO_URI not found in environment, using default.") if not os.getenv("MONGO_URI") else None
 MONGO_CLIENT = MongoClient(mongodb_url)
 DATABASE = MONGO_CLIENT["intelliview"]
 
-# Google OAuth Credentials
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
-if not GOOGLE_CLIENT_ID:
-    GOOGLE_CLIENT_ID = '688599391698-raqcmahpl90u6t2ua2kcmpbsfbqqq6ug.apps.googleusercontent.com' # Using a placeholder for demonstration
-    print("Warning: GOOGLE_CLIENT_ID not found in environment, using default.")
-app.config['GOOGLE_CLIENT_ID'] = GOOGLE_CLIENT_ID # Store in app.config for template access
+# Google OAuth
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID") or '688599391698-raqcmahpl90u6t2ua2kcmpbsfbqqq6ug.apps.googleusercontent.com'
+print("Warning: GOOGLE_CLIENT_ID not found in environment, using default.") if not os.getenv("GOOGLE_CLIENT_ID") else None
+app.config['GOOGLE_CLIENT_ID'] = GOOGLE_CLIENT_ID
 
-# Context processor to make GOOGLE_CLIENT_ID available in all templates
 @app.context_processor
 def inject_google_client_id():
-    return dict(config=app.config) # Pass the entire app.config object
+    return dict(config=app.config)
 
-# Initialize MediaPipe Pose outside the route for efficiency
-mp_pose = mp.solutions.pose
-pose_detector = mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5)
+# Gemini API Key
+gemini_api_key = os.getenv("GEMINI_API_KEY") or 'AIzaSyA2Mi4IjnQf4TJ5FQyO3p21njnN7PRmDyg'
+print("Warning: GEMINI_API_KEY not found in environment, using default.") if not os.getenv("GEMINI_API_KEY") else None
+genai.configure(api_key=gemini_api_key)
 
-from flask import Blueprint
+# -------------------------------------------------------------
+#  Lazy load heavy models once before first request
+# -------------------------------------------------------------
+@app.before_first_request
+def load_models_once():
+    global emotion_detector, pose_detector
+    # 1) FER emotion detector
+    emotion_detector = FER(mtcnn=True)
+    # 2) MediaPipe Pose detector
+    mp_pose = mp.solutions.pose
+    pose_detector = mp_pose.Pose(
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.5
+    )
+    print("✅ Loaded FER emotion_detector and MediaPipe pose_detector")
+
+# -------------------------------------------------------------
+#  ATS Blueprint
+# -------------------------------------------------------------
 ats_bp = Blueprint('ats', __name__, url_prefix='/ats')
 
 @ats_bp.route('/')
@@ -101,57 +100,42 @@ def ats_form():
     return render_template('ats_score.html')
 
 def extract_text_from_pdf_with_gemini(pdf_content):
-    """Extract text from PDF using Gemini AI"""
     try:
         model = genai.GenerativeModel('gemini-1.5-flash')
-        
-        # Prepare the PDF for Gemini
-        pdf_blob = {
-            "mime_type": "application/pdf",
-            "data": pdf_content
-        }
-        
+        pdf_blob = {"mime_type": "application/pdf", "data": pdf_content}
         prompt = """
-        Extract all text content from this PDF document. 
-        Return only the plain text without any formatting, markdown, or additional commentary.
-        Focus on preserving the original structure and content of the resume.
-        """
-        
+Extract all text content from this PDF document.
+Return only the plain text without any formatting, markdown, or additional commentary.
+Focus on preserving the original structure and content of the resume.
+"""
         response = model.generate_content([prompt, pdf_blob])
         return response.text.strip()
     except Exception as e:
         print(f"Error extracting text from PDF with Gemini: {e}")
         return None
- 
+
 def get_ats_score_with_gemini(resume_text):
-    """Get ATS score using Gemini AI"""
     try:
         model = genai.GenerativeModel('gemini-1.5-flash')
-        
         prompt = f"""
-        You are an ATS (Applicant Tracking System) analyzer. Analyze the following resume and provide a comprehensive assessment.
-
-        Resume Text:
-        {resume_text[:8000]}
-
-        Provide your analysis in the following JSON format:
-        {{
-            "score": <number between 0-100>,
-            "summary": "<brief 2-3 sentence summary>",
-            "strengths": ["<strength 1>", "<strength 2>", "<strength 3>"],
-            "suggestions": ["<suggestion 1>", "<suggestion 2>", "<suggestion 3>"]
-        }}
-
-        Scoring criteria:
-        - Clear formatting and structure (25 points)
-        - Relevant keywords and skills (25 points)
-        - Professional experience and achievements (25 points)
-        - Education and qualifications (15 points)
-        - Contact information and completeness (10 points)
-
-        Keep strengths and suggestions concise and actionable.
-        """
-        
+You are an ATS (Applicant Tracking System) analyzer. Analyze the following resume and provide a comprehensive assessment.
+Resume Text:
+{resume_text[:8000]}
+Provide your analysis in the following JSON format:
+{{
+"score": ,
+"summary": "",
+"strengths": ["", "", ""],
+"suggestions": ["", "", ""]
+}}
+Scoring criteria:
+- Clear formatting and structure (25 points)
+- Relevant keywords and skills (25 points)
+- Professional experience and achievements (25 points)
+- Education and qualifications (15 points)
+- Contact information and completeness (10 points)
+Keep strengths and suggestions concise and actionable.
+"""
         response = model.generate_content(prompt)
         return response.text.strip()
     except Exception as e:
@@ -162,107 +146,71 @@ def get_ats_score_with_gemini(resume_text):
 def ats_score():
     if not session.get("is_authenticated"):
         return jsonify({'error': 'User not authenticated'}), 401
-        
     if 'resume' not in request.files:
         return jsonify({'error': 'No resume file uploaded', 'reason': 'Please upload a PDF file.'}), 400
-    
     file = request.files['resume']
-    
     if file.filename == '' or not file.filename.lower().endswith('.pdf'):
         return jsonify({'error': 'Invalid file', 'reason': 'Please upload a PDF file.'}), 400
-    
+
+    pdf_content = file.read()
+    resume_text = extract_text_from_pdf_with_gemini(pdf_content)
+    if not resume_text:
+        return jsonify({'error': 'Text extraction failed','reason': 'Could not extract text from the PDF.'}), 500
+
+    gemini_response = get_ats_score_with_gemini(resume_text)
+    if not gemini_response:
+        return jsonify({'error': 'AI analysis failed','reason': 'Could not analyze the resume.'}), 500
+
     try:
-        # Read the PDF content
-        pdf_content = file.read()
-        
-        # Extract text using Gemini
-        resume_text = extract_text_from_pdf_with_gemini(pdf_content)
-        
-        if not resume_text:
-            return jsonify({
-                'error': 'Text extraction failed',
-                'reason': 'Could not extract text from the PDF. Please ensure the PDF contains readable text.'
-            }), 500
-        
-        # Get ATS score using Gemini
-        gemini_response = get_ats_score_with_gemini(resume_text)
-        
-        if not gemini_response:
-            return jsonify({
-                'error': 'AI analysis failed',
-                'reason': 'Could not analyze the resume. Please try again.'
-            }), 500
-        
-        # Parse the JSON response
-        try:
-            # Remove markdown code blocks if present
-            clean_response = gemini_response
-            # Check for specific json code block fence
-            if '```json' in clean_response:
-                # Extract JSON between ```json and the next ```
-                clean_response = clean_response.split('```json', 1)[1].split('```', 1)[0].strip()
-            # Fallback: check for generic code block fence
-            elif '```' in clean_response:
-                # Extract content between generic ```
-                clean_response = clean_response.split('```', 1)[1].split('```', 1)[0].strip()
-
-            parsed_data = json.loads(clean_response)
-
-            return jsonify({
-                'score': parsed_data.get('score', 0),
-                'summary': parsed_data.get('summary', 'Analysis completed.'),
-                'strengths': parsed_data.get('strengths', []),
-                'suggestions': parsed_data.get('suggestions', []),
-                'raw': gemini_response
-            })
-
-        except (IndexError, ValueError, json.JSONDecodeError) as e:
-            # Handle cases where splitting or JSON parsing fails
-            app.logger.error(f"Error parsing AI response: {e}")
-            return jsonify({
-                'score': 0,
-                'summary': 'Analysis format error.',
-                'strengths': [],
-                'suggestions': [],
-                'raw': gemini_response
-            }), 500
-
-            
-    except Exception as e:
-        print(f"General ATS error: {e}")
+        clean_response = gemini_response
+        if '```
+            clean_response = clean_response.split('```json',1)[1].split('```
+        elif '```' in clean_response:
+            clean_response = clean_response.split('``````',1)[0].strip()
+        parsed_data = json.loads(clean_response)
         return jsonify({
-            'error': 'Processing failed',
-            'reason': str(e)
+            'score': parsed_data.get('score', 0),
+            'summary': parsed_data.get('summary', 'Analysis completed.'),
+            'strengths': parsed_data.get('strengths', []),
+            'suggestions': parsed_data.get('suggestions', []),
+            'raw': gemini_response
+        })
+    except Exception as e:
+        app.logger.error(f"Error parsing AI response: {e}")
+        return jsonify({
+            'score': 0,
+            'summary': 'Analysis format error.',
+            'strengths': [],
+            'suggestions': [],
+            'raw': gemini_response
         }), 500
 
-# Register ATS blueprint
 app.register_blueprint(ats_bp)
 
-# --------------------- Routes ----------------------
+# -------------------------------------------------------------
+#  Standard Routes
+# -------------------------------------------------------------
 @app.route("/")
 def index():
     return render_template("index.html")
 
-@app.route('/profile')
+@app.route("/profile")
 def profile():
     if not session.get("is_authenticated"):
-        # Redirect to index if not authenticated, where Google login is available
         return redirect(url_for('index'))
-    return render_template('profile.html')
+    return render_template("profile.html")
 
-@app.route('/interview')
+@app.route("/interview")
 def interview():
     if not session.get("is_authenticated"):
-        # Redirect to index if not authenticated, where Google login is available
         return redirect(url_for('index'))
-    return render_template('interview.html')
+    return render_template("interview.html")
 
-@app.route('/ats_score')
-def ats_score():
+@app.route("/ats_score")
+def ats_score_page():
     if not session.get("is_authenticated"):
-        # Redirect to index if not authenticated, where Google login is available
         return redirect(url_for('index'))
-    return render_template('ats_score.html')
+    return render_template("ats_score.html")
 
 @app.route('/api/v1/create-interview', methods=['POST'])
 def create_interview():
