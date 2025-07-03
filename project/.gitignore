@@ -1,15 +1,24 @@
-# Python
-__pycache__/
-*.py[cod]
+# Python virtual environments
 .venv*/
-env/
-*.env
+venv*/
+env*/
 
-# Node
+# Byte-compiled files
+__pycache__/
+*.pyc
+*.pyo
+*~
+
+# Local IDE settings
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Node modules (if any)
 node_modules/
 
-# Logs
-*.log
-
-# macOS
-.DS_Store
+# Git LFS placeholder (if you use LFS)
+*.bin filter=lfs diff=lfs merge=lfs -text
