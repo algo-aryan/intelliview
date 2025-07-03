@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interview History - IntelliView</title>
+    <link rel="stylesheet" href="/static/css/history.css">
+    <link rel="icon" href="/static/assets/favicon.png" type="image/png">
+</head>
+
+<body>
+    <nav class="navbar">
+        <div class="navbar-container">
+          <div class="navbar-inner">
+            <a href="/" class="logo">
+              <div class="logo-icon">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M12 2L13.09 8.26L20 9L13.09 9.74L12 16L10.91 9.74L4 9L10.91 8.26L12 2Z" fill="currentColor"/>
+                </svg>
+              </div>
+              <span class="logo-text">IntelliView</span>
+            </a>
+            
+            <div class="navbar-right">
+              <div class="nav-links">
+                <a href="/" class="nav-link">Home</a>
+                <a href="/interview" class="nav-link">Interview</a>
+                <a href="/ats_score" class="nav-link">ATS Score</a>
+                <a href="/history" class="nav-link active">History</a>
+                <a href="/settings" class="nav-link">Settings</a>
+              </div>
+              
+              <div class="nav-divider"></div>
+              
+              <!-- Google Auth Profile Section -->
+              <div class="profile-section">
+                {% if session['user'] %}
+                <a href="/profile" class="profile-link">
+                  <img src="{{ session['user'].avatar_url }}" alt="Profile" class="profile-avatar">
+                  <span>Profile</span>
+                </a>
+                {% else %}
+                <a href="/auth/login" class="profile-link">
+                  <div class="profile-icon">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M12 12C14.21 12 16 10.21 16 8C16 5.79 14.21 4 12 4C9.79 4 8 5.79 8 8C8 10.21 9.79 12 12 12ZM12 14C9.33 14 4 15.34 4 18V20H20V18C20 15.34 14.67 14 12 14Z" fill="currentColor"/>
+                    </svg>
+                  </div>
+                  <span>Login</span>
+                </a>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+        </div>
+      </nav>
+
+    <main class="main-content">
+        <div class="content-container">
+            <header class="page-header">
+                <div class="header-icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" height="32px" viewBox="0 -960 960 960" width="32px">
+                        <path d="M480-120q-138 0-240.5-91.5T122-440h82q14 104 92.5 172T480-200q117 0 198.5-81.5T760-480q0-117-81.5-198.5T480-760q-69 0-129 32t-101 88h110v80H120v-240h80v94q51-64 124.5-99T480-840q75 0 140.5 28.5t114 77q48.5 48.5 77 114T840-480q0 75-28.5 140.5t-77 114q-48.5 48.5-114 77T480-120Zm112-192L440-464v-216h80v184l128 128-56 56Z" />
+                    </svg>
+                </div>
+                <h2>Your Interview History</h2>
+                <p class="page-subtitle" style="max-width: 600px; margin: auto">See your improvement in real-time - from stumbling over answers to delivering responses that impress hiring managers</p>
+            </header>
+
+            <section class="interviews-section">
+                {% if interviews %}
+                    <div class="interviews-stats">
+                        <div class="stat-card">
+                            <div class="stat-number">{{ interviews|length }}</div>
+                            <div class="stat-label">Total Interviews</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-number">{{ interviews|length }}</div>
+                            <div class="stat-label">This Month</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-number">85%</div>
+                            <div class="stat-label">Avg. Score</div>
+                        </div>
+                    </div>
+
+                    <div class="interviews-container">
+                        <ul class="interview-list">
+                            {% for interview in interviews %}
+                                <li class="interview-item">
+                                    <div class="interview-card">
+                                        <div class="interview-header">
+                                            <div class="interview-type-badge">
+                                                <svg xmlns="http://www.w3.org/2000/svg" height="20px" viewBox="0 -960 960 960" width="20px">
+                                                    <path d="M160-160q-33 0-56.5-23.5T80-240v-480q0-33 23.5-56.5T160-800h480q33 0 56.5 23.5T720-720v180l160-160v440L720-420v180q0 33-23.5 56.5T640-160H160Zm0-80h480v-480H160v480Zm0 0v-480 480Z" />
+                                                </svg>
+                                                <span>{{ interview.type }}</span>
+                                            </div>
+                                            <div class="interview-date">{{ interview.date }}</div>
+                                        </div>
+                                        
+                                        <div class="interview-details">
+                                            <h3 class="interview-title">{{ interview.type }} Interview</h3>
+                                            <div class="interview-meta">
+                                                <div class="meta-item">
+                                                    <svg xmlns="http://www.w3.org/2000/svg" height="16px" viewBox="0 -960 960 960" width="16px">
+                                                        <path d="M160-80q-33 0-56.5-23.5T80-160v-440q0-33 23.5-56.5T160-680h200v-120q0-33 23.5-56.5T440-880h80q33 0 56.5 23.5T600-800v120h200q33 0 56.5 23.5T880-600v440q0 33-23.5 56.5T800-80H160Zm0-80h640v-440H160v440Zm280-520h80v-120h-80v120ZM160-160v-440 440Z"/>
+                                                    </svg>
+                                                    <p><strong>Role:</strong> {{ interview.job_role }}</p>
+                                                </div>
+                                                <div class="meta-item">
+                                                    <svg xmlns="http://www.w3.org/2000/svg" height="16px" viewBox="0 -960 960 960" width="16px">
+                                                        <path d="M360-840v-80h240v80H360Zm80 440h80v-240h-80v240Zm40 320q-74 0-139.5-28.5T226-186q-49-49-77.5-114.5T120-440q0-74 28.5-139.5T226-694q49-49 114.5-77.5T480-800q62 0 119 20t107 58l56-56 56 56-56 56q38 50 58 107t20 119q0 74-28.5 139.5T734-186q-49 49-114.5 77.5T480-80Zm0-80q116 0 198-82t82-198q0-116-82-198t-198-82q-116 0-198 82t-82 198q0 116 82 198t198 82Zm0-280Z"/>
+                                                    </svg>
+                                                    <p><strong>Duration:</strong> {{ interview.duration }}</p>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div class="interview-actions">
+                                            <a href="{{ url_for('view_report', identifier=interview.report_id) }}" class="view-report-btn">
+                                                <svg xmlns="http://www.w3.org/2000/svg" height="20px" viewBox="0 -960 960 960" width="20px">
+                                                    <path d="M200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h280v80H200v560h560v-280h80v280q0 33-23.5 56.5T760-120H200Zm188-212-56-56 372-372H560v-80h280v280h-80v-144L388-332Z"/>
+                                                </svg>
+                                                <span>View Report</span>
+                                            </a>
+                                        </div>
+                                    </div>
+                                </li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                {% else %}
+                    <div class="empty-state">
+                        <div class="empty-icon">
+                            <svg xmlns="http://www.w3.org/2000/svg" height="64px" viewBox="0 -960 960 960" width="64px">
+                                <path d="M160-160q-33 0-56.5-23.5T80-240v-480q0-33 23.5-56.5T160-800h480q33 0 56.5 23.5T720-720v180l160-160v440L720-420v180q0 33-23.5 56.5T640-160H160Zm0-80h480v-480H160v480Zm0 0v-480 480Z" />
+                            </svg>
+                        </div>
+                        <h3>No Interviews Yet</h3>
+                        <p class="no-interviews">You haven't completed any interviews yet. Ready to get started?</p>
+                        <a href="{{ url_for('interview') }}" class="start-interview-btn">
+                            <svg xmlns="http://www.w3.org/2000/svg" height="20px" viewBox="0 -960 960 960" width="20px">
+                                <path d="M320-200v-560l440 280-440 280Zm80-280Zm0 134 210-134-210-134v268Z"/>
+                            </svg>
+                            <span>Start Your First Interview</span>
+                        </a>
+                    </div>
+                {% endif %}
+            </section>
+        </div>
+    </main>
+
+    <footer class="site-footer">
+        <div class="footer-content">
+            <div class="footer-text">
+                <p>&copy; 2025 IntelliView. All rights reserved.</p>
+            </div>
+            <div class="footer-links">
+                <a href="/privacy">Privacy Policy</a>
+                <a href="/terms">Terms of Service</a>
+                <a href="/support">Support</a>
+            </div>
+        </div>
+    </footer>
+</body>
+
+</html>
