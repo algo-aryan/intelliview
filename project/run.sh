@@ -1,4 +1,5 @@
 #!/bin/bash
+gunicorn main:app --bind 0.0.0.0:$PORT
 
 echo "🚀 Starting IntelliView AI Interview Platform..."
 
@@ -49,8 +50,8 @@ if [ ! -d "../uploads" ]; then
 fi
 
 echo "🌟 Starting the application..."
-echo "🌐 Open your browser and go to: http://localhost:8000"
-echo "🔍 ATS Resume Scoring available at: http://localhost:8000/ats/"
+echo "🌐 Open your browser"
+echo "🔍 ATS Resume Scoring available"
 echo "📱 Press Ctrl+C to stop the server"
 echo ""
 

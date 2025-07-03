@@ -8,11 +8,11 @@ venv_intelliview/
 bin/
 lib/
 pyvenv.cfg
-.DS_Store
 uploads/
 *.log
 *.h5
 *.pt
 *.pb
 *.sqlite3
+.DS_Store
 node_modules/
