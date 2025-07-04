@@ -3,7 +3,12 @@ import secrets
 import random
 import json
 import textwrap
+import threading
 from datetime import datetime, timedelta
+
+# TensorFlow optimization - MUST be before any TF imports
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
 
 import cv2
 import numpy as np
@@ -19,14 +24,82 @@ from flask_session import Session
 from pymongo import MongoClient
 import redis
 from dotenv import load_dotenv
-from fer import FER  # keep import here for type reference; instance created later
-import mediapipe as mp  # same as above
+
+# Configure TensorFlow for memory efficiency
+def configure_tensorflow():
+    """Configure TensorFlow for memory-efficient CPU operation"""
+    try:
+        import tensorflow as tf
+        # Disable GPU (forces CPU usage which is more memory predictable)
+        tf.config.set_visible_devices([], 'GPU')
+        # Set thread configurations for CPU efficiency
+        tf.config.threading.set_inter_op_parallelism_threads(1)
+        tf.config.threading.set_intra_op_parallelism_threads(1)
+        print("✅ TensorFlow configured for memory-efficient CPU operation")
+    except Exception as e:
+        print(f"⚠️ TensorFlow configuration warning: {e}")
+
+# Call this before any TF operations
+configure_tensorflow()
 
 # -------------------------------------------------------------
-#  Lazy-load model placeholders
+#  Thread-safe lazy loading for ML models
 # -------------------------------------------------------------
 emotion_detector = None
 pose_detector = None
+_models_loaded = False
+_loading_lock = threading.Lock()
+
+def load_models_lazy():
+    """Load models only when needed, thread-safe"""
+    global emotion_detector, pose_detector, _models_loaded
+    
+    if _models_loaded:
+        return
+        
+    with _loading_lock:
+        if _models_loaded:  # Double-check pattern
+            return
+            
+        print("🔄 Loading ML models...")
+        
+        try:
+            # Import and initialize FER
+            from fer import FER
+            emotion_detector = FER(mtcnn=True)
+            
+            # Import and initialize MediaPipe
+            import mediapipe as mp
+            mp_pose = mp.solutions.pose
+            pose_detector = mp_pose.Pose(
+                static_image_mode=False,  # More memory efficient for video
+                model_complexity=0,       # Use lighter model
+                min_detection_confidence=0.7,
+                min_tracking_confidence=0.5
+            )
+            
+            _models_loaded = True
+            print("✅ ML models loaded successfully")
+            
+        except Exception as e:
+            print(f"❌ Error loading ML models: {e}")
+            # Set models to None so they can be retried later
+            emotion_detector = None
+            pose_detector = None
+            _models_loaded = False
+            raise
+
+def get_emotion_detector():
+    """Get emotion detector, loading if necessary"""
+    if not _models_loaded:
+        load_models_lazy()
+    return emotion_detector
+
+def get_pose_detector():
+    """Get pose detector, loading if necessary"""
+    if not _models_loaded:
+        load_models_lazy()
+    return pose_detector
 
 # -------------------------------------------------------------
 #  Flask app setup
@@ -53,7 +126,7 @@ if os.getenv("FLASK_ENV") == "development":
 Session(app)
 
 # MongoDB
-mongodb_url = os.getenv("MONGO_URI") or 'mongodb+srv://aryanbansal:aryan1234@intelliview.lbxflf8.mongodb.net/intelliview?retryWrites=true&amp;w=majority'
+mongodb_url = os.getenv("MONGO_URI") or 'mongodb+srv://aryanbansal:aryan1234@intelliview.lbxflf8.mongodb.net/intelliview?retryWrites=true&w=majority'
 print("Warning: MONGO_URI not found in environment, using default.") if not os.getenv("MONGO_URI") else None
 MONGO_CLIENT = MongoClient(mongodb_url)
 DATABASE = MONGO_CLIENT["intelliview"]
@@ -72,27 +145,24 @@ gemini_api_key = os.getenv("GEMINI_API_KEY") or 'AIzaSyA2Mi4IjnQf4TJ5FQyO3p21njn
 print("Warning: GEMINI_API_KEY not found in environment, using default.") if not os.getenv("GEMINI_API_KEY") else None
 genai.configure(api_key=gemini_api_key)
 
-# -------------------------------------------------------------
-#  Lazy load heavy models once before first request
-# -------------------------------------------------------------
-# Lazy-load heavy models once per worker, on first request
-emotion_detector = None
-pose_detector = None
-_models_loaded = False
+# Azure Face API (if configured)
+AZURE_FACE_API_ENDPOINT = os.getenv("AZURE_FACE_API_ENDPOINT")
+AZURE_FACE_API_KEY = os.getenv("AZURE_FACE_API_KEY")
 
-@app.before_request
-def _load_models_once():
-    global emotion_detector, pose_detector, _models_loaded
-    if not _models_loaded:
-        emotion_detector = FER(mtcnn=True)
-        mp_pose = mp.solutions.pose
-        pose_detector = mp_pose.Pose(
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5
-        )
-        _models_loaded = True
-        print("✅ Lazy-loaded FER emotion_detector and MediaPipe pose_detector")
+# Health check endpoint
+@app.route('/health')
+def health():
+    """Health check endpoint"""
+    return {"status": "healthy", "models_loaded": _models_loaded}, 200
 
+@app.route('/warmup', methods=['POST'])
+def warmup():
+    """Endpoint to trigger model loading"""
+    try:
+        load_models_lazy()
+        return {"status": "models loaded successfully"}, 200
+    except Exception as e:
+        return {"status": "error", "message": str(e)}, 500
 
 # -------------------------------------------------------------
 #  ATS Blueprint
@@ -173,7 +243,7 @@ def ats_score():
             try:
                 clean_response = clean_response.split('```json', 1)[1].split('```', 1)[0].strip()
             except IndexError:
-                clean_response = "{}"  # fallback to empty JSON object if something goes wrong
+                clean_response = "{}"
         elif '```' in clean_response:
             try:
                 clean_response = clean_response.split('```', 1)[1].split('```', 1)[0].strip()
@@ -244,10 +314,10 @@ def create_interview():
     if not job_description or not resume:
         return jsonify({'status': 'error', 'message': 'Job description or resume not provided'}), 400
 
-    # Fetch resume summary via LLM (already present, good!)
+    # Fetch resume summary via LLM
     model = genai.GenerativeModel('gemini-2.5-flash-preview-04-17')
     prompt_resume_summary = f"""
-    Carefully review the attached resume file. Provide a thorough, structured, and objective detailed summary of the candidate’s background, including:
+    Carefully review the attached resume file. Provide a thorough, structured, and objective detailed summary of the candidate's background, including:
     - Contact information (if present)
     - Education history (degrees, institutions, graduation years)
     - Work experience (roles, companies, durations, responsibilities, achievements)
@@ -263,7 +333,7 @@ def create_interview():
     response_resume = model.generate_content([prompt_resume_summary, resume_blob])
     resume_summary = response_resume.text
 
-    # --- NEW ADDITION: GENERATE QUESTIONS BASED ON INTERVIEW TYPE, JOB DESCRIPTION, AND RESUME ---
+    # Generate questions based on interview type
     generated_questions = []
     try:
         question_generation_prompt = ""
@@ -299,18 +369,12 @@ def create_interview():
             Only output the questions, one per line, with no numbering or extra text.
             """
         
-        # Add print statements for debugging Gemini for create_interview
-        print(f"DEBUG (create-interview): Question generation prompt:\n{question_generation_prompt}")
         questions_response = model.generate_content([question_generation_prompt])
-        print(f"DEBUG (create-interview): Raw Gemini questions response.text:\n{questions_response.text}")
-        
         generated_questions = questions_response.text.split('\n')
         generated_questions = [q for q in generated_questions if q.strip()]
-        print(f"DEBUG (create-interview): Final generated questions list:\n{generated_questions}")
-
+        
     except Exception as e:
         print(f"ERROR (create-interview): Failed to generate questions with Gemini: {e}")
-        # Provide a fallback in case AI fails
         generated_questions = ["Tell me about yourself.", "Walk me through your resume.", "What are your strengths?", "What are your weaknesses?", "Where do you see yourself in 5 years?"]
         
     # Creating a new interview
@@ -326,58 +390,44 @@ def create_interview():
             "is_active": True,
             "is_completed": False,
             "ai_report": "",
-            "questions": generated_questions, # <-- NOW THIS WILL BE POPULATED!
-            "interview_history": [], # Initialize interview history
-            "behavior_analysis": [], # Initialize behavior analysis array
+            "questions": generated_questions,
+            "interview_history": [],
+            "behavior_analysis": [],
         }
     )
 
-    # Redirect to the interview page
-    return redirect(
-        url_for(
-            "interview_page", interview_identifier=interview_identifier
-        )
-    )
-
+    return redirect(url_for("interview_page", interview_identifier=interview_identifier))
 
 @app.route('/interview/<interview_identifier>', methods=['GET'])
 def interview_page(interview_identifier):
     if not session.get("is_authenticated"):
         return redirect(url_for('index'))
-    # Check if the interview exists
+    
     interview = DATABASE["INTERVIEWS"].find_one({"interview_identifier": interview_identifier})
     if interview is None:
         return jsonify({'status': 'error', 'message': 'Interview not found'}), 404
 
-    # Check if the user is authorized to access this interview
     if interview["user_id"] != session["user"]["user_id"]:
         return jsonify({'status': 'error', 'message': 'Unauthorized access to this interview'}), 403
     
-    # Check if the interview is completed
     if interview["is_completed"]:
-        return redirect(
-            url_for(
-                "interview_results", interview_identifier=interview_identifier
-            )
-        )
+        return redirect(url_for("interview_results", interview_identifier=interview_identifier))
 
     return render_template('take-interview.html', interview=interview)
 
 @app.route('/new-mock-interview', methods=['GET'])
 def new_mock_interview():
-    print("DEBUG: Entered new_mock_interview route.")
     if not session.get("is_authenticated"):
         return redirect(url_for('index'))
+    
     user_info = DATABASE["USERS"].find_one({"user_id": session["user"]["user_id"]})
     if user_info is None:
         return jsonify({'status': 'error', 'message': 'User not found'}), 404
-    # Check if the user has a resume summary
+    
     if not user_info.get("user_info", {}).get("resume_summary"):
         return redirect(url_for('settings', message='Please upload your resume first to generate mock interview questions.'))
     
-    # --- ADD THESE DEBUG PRINTS HERE ---
     resume_summary = user_info['user_info']['resume_summary']
-    print(f"DEBUG (new-mock-interview): Resume summary being sent to Gemini:\n{resume_summary}")
     
     model = genai.GenerativeModel('gemini-2.5-flash-preview-04-17')
     prompt = f"""
@@ -394,57 +444,45 @@ def new_mock_interview():
     
     try:
         response = model.generate_content([prompt])
-        # --- ADD THIS DEBUG PRINT HERE ---
-        print(f"DEBUG (new-mock-interview): Raw Gemini response.text:\n{response.text}")
-        
         questions = response.text.split('\n')
-        # Filter out any empty questions
         questions = [q for q in questions if q.strip()]
-        
-        # --- ADD THIS DEBUG PRINT HERE ---
-        print(f"DEBUG (new-mock-interview): Final questions list after processing:\n{questions}")
-
     except Exception as e:
         print(f"ERROR (new-mock-interview): Gemini generation failed: {e}")
-        questions = ["Error: Could not generate questions. Please try again or check API key."] # Fallback for display
+        questions = ["Error: Could not generate questions. Please try again or check API key."]
     
     mock_interview_identifier = secrets.token_hex(16)
     
     DATABASE["INTERVIEWS"].insert_one(
-        {   "mock_interview_identifier": mock_interview_identifier,
+        {
+            "mock_interview_identifier": mock_interview_identifier,
             "user_id": session["user"]["user_id"],
             "questions": questions,
             "created_at": datetime.now(),
             "is_active": True,
             "is_completed": False,
-            "video_url": "", # Assuming you might add video storage later
+            "video_url": "",
             "ai_report": "",
-            "interview_history": [], # Initialize interview history for mock
-            "behavior_analysis": [], # Initialize behavior analysis array for mock
+            "interview_history": [],
+            "behavior_analysis": [],
         }
     )
 
     return render_template('begin_mock_interview.html', mock_interview_identifier=mock_interview_identifier)
 
-
 @app.route('/mock-interview/<mock_interview_identifier>', methods=['GET'])
 def mock_interview(mock_interview_identifier):
     if not session.get("is_authenticated"):
         return redirect(url_for('index'))
-    # Check if the mock interview exists
+    
     mock_interview = DATABASE["INTERVIEWS"].find_one({"mock_interview_identifier": mock_interview_identifier})
     if mock_interview is None:
         return jsonify({'status': 'error', 'message': 'Mock interview not found'}), 404
 
-    # Check if the user is authorized to access this mock interview
     if mock_interview["user_id"] != session["user"]["user_id"]:
         return jsonify({'status': 'error', 'message': 'Unauthorized access to this mock interview'}), 403
 
-    # Pass the mock interview object which contains questions to the template
     return render_template('mock_interview.html', mock_interview=mock_interview)
 
-
-# New route to get questions based on identifier
 @app.route('/get-questions', methods=['GET'])
 def get_questions():
     if not session.get("is_authenticated"):
@@ -454,23 +492,16 @@ def get_questions():
     if not identifier:
         return jsonify({'status': 'error', 'message': 'Interview ID not provided'}), 400
 
-    # Try to find the interview by interview_identifier (for regular interviews)
     interview = DATABASE["INTERVIEWS"].find_one({"interview_identifier": identifier, "user_id": session["user"]["user_id"]})
     
-    # If not found, try by mock_interview_identifier (for mock interviews)
     if interview is None:
         interview = DATABASE["INTERVIEWS"].find_one({"mock_interview_identifier": identifier, "user_id": session["user"]["user_id"]})
 
     if interview is None:
-        print(f"DEBUG: Interview with identifier {identifier} not found or unauthorized for user {session.get('user', {}).get('user_id')}")
         return jsonify({'status': 'error', 'message': 'Interview not found or unauthorized access'}), 404
 
-    # Ensure 'questions' key exists and is a list
-    questions = interview.get("questions", []) # Default to empty list if not present
-    
-    print(f"DEBUG: Found interview. Questions: {questions}") # Add this debug
+    questions = interview.get("questions", [])
     return jsonify({'status': 'success', 'questions': questions})
-
 
 @app.route('/api/v1/parse-resume', methods=['POST'])
 def parse_resume():
@@ -491,7 +522,6 @@ def parse_resume():
             if not mime_type:
                 return jsonify({'status': 'error', 'message': 'Could not determine file MIME type'}), 400
 
-            # Prepare the file part for Gemini
             resume_blob = {
                 "mime_type": mime_type,
                 "data": file_content
@@ -499,7 +529,7 @@ def parse_resume():
             model = genai.GenerativeModel('gemini-2.5-flash-preview-04-17')
 
             prompt = """
-            Carefully review the attached resume file. Provide a thorough, structured, and objective summary of the candidate’s background, including:
+            Carefully review the attached resume file. Provide a thorough, structured, and objective summary of the candidate's background, including:
             - Contact information (if present)
             - Education history (degrees, institutions, graduation years)
             - Work experience (roles, companies, durations, responsibilities, achievements)
@@ -512,7 +542,6 @@ def parse_resume():
             response = model.generate_content([prompt, resume_blob])
             markdown_description = response.text
 
-            # Saving the resume summary to the database
             DATABASE["USERS"].update_one(
                 {"user_id": session["user"]["user_id"]},
                 {
@@ -523,7 +552,6 @@ def parse_resume():
                 },
             )
 
-            # Return a JSON response for better frontend handling
             return jsonify({
                 'status': 'success',
                 'message': f'Hey {session["user"]["name"]}, your resume has been successfully processed! You can now generate mock interview questions based on your resume summary.',
@@ -546,20 +574,18 @@ def login():
             GOOGLE_CLIENT_ID
         )
 
-        user_id = idinfo["sub"] # Google's unique user ID
+        user_id = idinfo["sub"]
         name = idinfo.get("name", "User")
         email = idinfo.get("email")
         picture = idinfo.get("picture")
 
-        # Check if user already exists in your DB based on Google's user_id
         user = DATABASE["USERS"].find_one({"user_id": user_id})
         
         if not user:
-            # Create a new user entry
             DATABASE["USERS"].insert_one({
                 "user_id": user_id,
                 "user_info": {
-                    "username": email.split("@")[0], # Simple username from email
+                    "username": email.split("@")[0],
                     "name": name,
                     "avatar_url": picture,
                     "email": email,
@@ -567,25 +593,23 @@ def login():
                 },
                 "account_info": {
                     "oauth_provider": "google",
-                    "oauth_id": user_id, # Store Google's sub as oauth_id
+                    "oauth_id": user_id,
                     "created_at": datetime.now(),
                     "last_login": datetime.now(),
                     "is_active": True,
                 },
             })
         else:
-            # Update existing user's last login and avatar
             DATABASE["USERS"].update_one(
-                {"user_id": user_id}, # Use user_id for lookup as it's consistent
+                {"user_id": user_id},
                 {"$set": {
                     "account_info.last_login": datetime.now(),
                     "user_info.avatar_url": picture,
-                    "user_info.name": name, # Update name in case it changed
-                    "user_info.email": email # Update email in case it changed
+                    "user_info.name": name,
+                    "user_info.email": email
                 }}
             )
 
-        # Retrieve the (potentially updated) user information to set session
         user_info = DATABASE["USERS"].find_one({"user_id": user_id})
         session["user"] = {
             "user_id": user_info["user_id"],
@@ -628,14 +652,12 @@ def settings():
                 "user_info.avatar_url": avatar_url
             }}
         )
-        # Update session
         session["user"]["name"] = name
         session["user"]["username"] = username
         session["user"]["avatar_url"] = avatar_url
         message = "Settings updated successfully!"
         user = DATABASE["USERS"].find_one({"user_id": user_id})
     return render_template('settings.html', user=user["user_info"] if user else None, message=message)
-
 
 @app.route('/upload-screencapture', methods=['POST'])
 def upload_screencapture():
@@ -651,30 +673,53 @@ def upload_screencapture():
     if not identifier:
         return jsonify({'status': 'error', 'message': 'Interview ID not provided'}), 400
 
-    image_data = file.read() # Read the binary image data
+    image_data = file.read()
     
-    # Initialize analysis report with default/fallback values (will be overwritten by Gemini/analysis)
+    # Initialize analysis report
     analysis_report = {
         "emotion_analysis": "Processing...",
         "posture_analysis": "Processing...",
         "body_language_analysis": "Processing...",
         "eye_contact_analysis": "Processing...",
         "gestures_analysis": "Processing...",
-        "movement_analysis": "Processing...", # This will be set programmatically, not by Gemini
+        "movement_analysis": "Processing...",
         "overall_impression": "Processing...",
         "suggestions_for_improvement": "Processing..."
     }
 
-    # Store raw data for Gemini prompt
+    # Get models (will load if not already loaded)
+    try:
+        emotion_detector = get_emotion_detector()
+        pose_detector = get_pose_detector()
+        
+        # Import MediaPipe pose landmarks
+        import mediapipe as mp
+        mp_pose = mp.solutions.pose
+        
+    except Exception as e:
+        print(f"ERROR: Could not load ML models: {e}")
+        return jsonify({
+            'status': 'error', 
+            'message': 'AI models not available',
+            'analysis_report': {
+                "emotion_analysis": "Models not loaded",
+                "posture_analysis": "Models not loaded", 
+                "body_language_analysis": "Models not loaded",
+                "eye_contact_analysis": "Models not loaded",
+                "gestures_analysis": "Models not loaded",
+                "movement_analysis": "Models not loaded",
+                "overall_impression": "AI analysis unavailable",
+                "suggestions_for_improvement": "Please try again later"
+            }
+        }), 500
+
+    # Store raw data for analysis
     detected_posture = "Undetermined"
     detected_eye_contact = "Undetermined"
-    head_yaw = None
-    head_pitch = None
     detected_gestures = "Undetermined"
     detected_body_language_type = "Undetermined"
 
-
-    # --- PART 1: Azure Face API for Facial Attributes (Head Pose / Eye Contact) ---
+    # Azure Face API for head pose/eye contact (if configured)
     if AZURE_FACE_API_ENDPOINT and AZURE_FACE_API_KEY:
         try:
             detect_url = f"{AZURE_FACE_API_ENDPOINT}/detect"
@@ -684,26 +729,19 @@ def upload_screencapture():
                 "Ocp-Apim-Subscription-Key": AZURE_FACE_API_KEY
             }
             
-            # Request only headPose. Emotion is intentionally omitted.
             params = {
                 "returnFaceAttributes": "headPose", 
                 "returnFaceId": "false",
                 "returnFaceLandmarks": "false"
             }
 
-            response = requests.post(
-                detect_url,
-                headers=headers,
-                params=params,
-                data=image_data 
-            )
+            response = requests.post(detect_url, headers=headers, params=params, data=image_data)
             response.raise_for_status()
             
             cv_results = response.json()
 
             if cv_results and len(cv_results) > 0:
                 first_face = cv_results[0]
-                
                 head_pose = first_face.get('faceAttributes', {}).get('headPose', {})
                 if head_pose:
                     head_yaw = head_pose.get('yaw', 0)
@@ -718,53 +756,41 @@ def upload_screencapture():
                         detected_eye_contact = "Intermittent/Looking Away"
                         analysis_report["eye_contact_analysis"] = "Intermittent (Gaze Off-Camera)"
                 else:
-                    detected_eye_contact = "Undetermined (No head pose data from Azure)"
-                    analysis_report["eye_contact_analysis"] = "Undetermined (No head pose data)"
-
+                    detected_eye_contact = "Undetermined"
+                    analysis_report["eye_contact_analysis"] = "Undetermined"
             else:
-                detected_eye_contact = "No face detected by Azure"
-                analysis_report["eye_contact_analysis"] = "No face detected by Azure"
+                detected_eye_contact = "No face detected"
+                analysis_report["eye_contact_analysis"] = "No face detected"
 
-        except requests.exceptions.RequestException as e:
-            print(f"ERROR: Azure Face API request failed: {e}")
-            analysis_report["eye_contact_analysis"] = "Azure API Error"
-            # We'll let Gemini handle the suggestion based on this status
-        except json.JSONDecodeError as e:
-            print(f"ERROR: Azure API response was not valid JSON: {e}")
-            analysis_report["eye_contact_analysis"] = "Azure API Response Error"
         except Exception as e:
-            print(f"ERROR: General error during Azure facial analysis: {e}")
-            analysis_report["eye_contact_analysis"] = "Internal Error"
+            print(f"ERROR: Azure Face API failed: {e}")
+            analysis_report["eye_contact_analysis"] = "Azure API Error"
     else:
         analysis_report["eye_contact_analysis"] = "Azure API Not Configured"
 
-
-    # --- PART 2: MediaPipe for Body Pose, Posture, Gestures ---
+    # MediaPipe for body pose, posture, gestures
     try:
         np_arr = np.frombuffer(image_data, np.uint8)
         image_cv = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
         if image_cv is None:
-            raise ValueError("Could not decode image data for MediaPipe.")
+            raise ValueError("Could not decode image data")
 
-        # 1. Detect emotion
+        # Detect emotion
         emotions = emotion_detector.detect_emotions(image_cv)
         if emotions:
-            # AFTER
             top_emotion, _ = emotion_detector.top_emotion(image_cv)
             analysis_report["emotion_analysis"] = top_emotion.capitalize()
-
         else:
             analysis_report["emotion_analysis"] = "No face detected for emotion"
 
-
+        # Process pose
         image_rgb = cv2.cvtColor(image_cv, cv2.COLOR_BGR2RGB)
-        
-        results = pose_detector.process(image_rgb) 
+        results = pose_detector.process(image_rgb)
         
         if results.pose_landmarks:
             landmarks = results.pose_landmarks.landmark
             
-            # --- Posture Analysis ---
+            # Posture analysis
             left_shoulder_y = landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER].y
             right_shoulder_y = landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER].y
             left_hip_y = landmarks[mp_pose.PoseLandmark.LEFT_HIP].y
@@ -773,7 +799,7 @@ def upload_screencapture():
             avg_shoulder_y = (left_shoulder_y + right_shoulder_y) / 2
             avg_hip_y = (left_hip_y + right_hip_y) / 2
 
-            posture_threshold = 0.08 
+            posture_threshold = 0.08
             
             if avg_shoulder_y < avg_hip_y - posture_threshold:
                 detected_posture = "Upright"
@@ -782,7 +808,7 @@ def upload_screencapture():
             else:
                 detected_posture = "Neutral"
 
-            # --- Body Language & Gestures (For Gemini Prompt) ---
+            # Gesture analysis
             left_wrist_y = landmarks[mp_pose.PoseLandmark.LEFT_WRIST].y
             right_wrist_y = landmarks[mp_pose.PoseLandmark.RIGHT_WRIST].y
             left_shoulder_y = landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER].y
@@ -792,8 +818,8 @@ def upload_screencapture():
             left_hip_x = landmarks[mp_pose.PoseLandmark.LEFT_HIP].x
             right_hip_x = landmarks[mp_pose.PoseLandmark.RIGHT_HIP].x
             
-            wrist_above_shoulder_threshold = 0.05 
-            arm_out_threshold = 0.15 
+            wrist_above_shoulder_threshold = 0.05
+            arm_out_threshold = 0.15
 
             if (left_wrist_y < (left_shoulder_y - wrist_above_shoulder_threshold)) or \
                (right_wrist_y < (right_shoulder_y - wrist_above_shoulder_threshold)):
@@ -809,28 +835,25 @@ def upload_screencapture():
                     detected_gestures = "Minimal/Natural"
                     detected_body_language_type = "Neutral/Restrained"
 
-            # Set movement analysis for programmatic part, not Gemini
-            analysis_report["movement_analysis"] = "Body presence detected (dynamic movement analysis requires video stream)"
+            analysis_report["movement_analysis"] = "Body presence detected"
             
         else:
             detected_posture = "No Body Detected"
             detected_body_language_type = "No Body Detected"
             detected_gestures = "No Body Detected"
-            analysis_report["movement_analysis"] = "No Body Detected (for movement analysis)"
+            analysis_report["movement_analysis"] = "No Body Detected"
 
     except Exception as e:
-        print(f"ERROR: MediaPipe Pose analysis failed: {e}")
+        print(f"ERROR: MediaPipe analysis failed: {e}")
         detected_posture = "Pose AI Error"
         detected_body_language_type = "Pose AI Error"
         detected_gestures = "Pose AI Error"
-        analysis_report["movement_analysis"] = "Pose AI Error (for movement analysis)"
+        analysis_report["movement_analysis"] = "Pose AI Error"
 
-
-    # --- PART 3: Generate Detailed Feedback using Gemini ---
+    # Generate detailed feedback using Gemini
     try:
         model = genai.GenerativeModel('gemini-2.5-flash-preview-04-17')
         
-        # Prepare the data for Gemini - MODIFIED FOR CONCISENESS
         gemini_input_data = f"""
         Provide concise feedback under 3 sentences each, bullet-pointed, on these items:
         - Body Language: {detected_body_language_type}
@@ -852,12 +875,11 @@ def upload_screencapture():
         Suggestions:
         • …
         """
-
         
         response = model.generate_content(gemini_input_data)
         gemini_feedback_text = response.text
 
-        # Parse Gemini's response into analysis_report fields
+        # Parse Gemini's response
         sections = {
             "Body Language": "",
             "Eye Contact": "",
@@ -887,37 +909,21 @@ def upload_screencapture():
             elif current_section:
                 sections[current_section] += line + " "
         
-        # Populate analysis_report from parsed sections
+        # Update analysis report
         analysis_report["body_language_analysis"] = sections["Body Language"].strip() if sections["Body Language"] else analysis_report["body_language_analysis"]
         analysis_report["eye_contact_analysis"] = sections["Eye Contact"].strip() if sections["Eye Contact"] else analysis_report["eye_contact_analysis"]
         analysis_report["gestures_analysis"] = sections["Gestures"].strip() if sections["Gestures"] else analysis_report["gestures_analysis"]
         analysis_report["overall_impression"] = sections["Overall Impression"].strip() if sections["Overall Impression"] else analysis_report["overall_impression"]
         analysis_report["suggestions_for_improvement"] = sections["Suggestions for Improvement"].strip() if sections["Suggestions for Improvement"] else analysis_report["suggestions_for_improvement"]
 
-        # Ensure posture analysis is always explicitly set from MediaPipe
         analysis_report["posture_analysis"] = detected_posture
 
     except Exception as e:
-        print(f"ERROR: Gemini API call or parsing failed: {e}")
-        # Fallback to more generic messages if Gemini fails
-        if "No Body Detected" in detected_posture:
-            analysis_report["body_language_analysis"] = "No Body Detected for analysis."
-            analysis_report["gestures_analysis"] = "No Gestures Detected (no body)."
-            analysis_report["overall_impression"] = "Analysis limited due to no body detection."
-            analysis_report["suggestions_for_improvement"] = "Ensure your full body is visible to the camera."
-        elif "No face detected" in detected_eye_contact:
-            analysis_report["eye_contact_analysis"] = "No Face Detected for eye contact analysis."
-            analysis_report["overall_impression"] = "Analysis limited due to no face detection."
-            analysis_report["suggestions_for_improvement"] = "Ensure your face is clearly visible to the camera."
-        else:
-            analysis_report["overall_impression"] = "Detailed analysis unavailable (AI error)."
-            analysis_report["suggestions_for_improvement"] = f"An internal error occurred during detailed analysis: {e}. Please try again."
+        print(f"ERROR: Gemini analysis failed: {e}")
+        analysis_report["overall_impression"] = "Detailed analysis unavailable"
+        analysis_report["suggestions_for_improvement"] = "Please try again later"
 
-
-    # Store the analysis in the database
-    # Make sure 'DATABASE' and 'session' are correctly accessible in this context
-    # If DATABASE is a global object, ensure it's imported or defined.
-    # Example: from your_app_config import DATABASE
+    # Store analysis in database
     DATABASE["INTERVIEWS"].update_one(
         {"$or": [
             {"interview_identifier": identifier},
@@ -927,7 +933,7 @@ def upload_screencapture():
     )
 
     return jsonify({'status': 'success', 'message': 'Screencapture received', 'analysis_report': analysis_report})
-    
+
 @app.route('/submit-answer', methods=['POST'])
 def submit_answer():
     if not session.get("is_authenticated"):
@@ -941,7 +947,6 @@ def submit_answer():
     if not all([interview_id, question_index is not None, user_answer is not None]):
         return jsonify({'status': 'error', 'message': 'Missing data for answer submission'}), 400
 
-    # Find the interview, checking both interview_identifier and mock_interview_identifier
     interview = DATABASE["INTERVIEWS"].find_one({
         "$or": [
             {"interview_identifier": interview_id},
@@ -953,15 +958,12 @@ def submit_answer():
     if not interview:
         return jsonify({'status': 'error', 'message': 'Interview not found or unauthorized'}), 404
 
-    # Get the question from the interview's questions list
     questions = interview.get('questions', [])
     if question_index < 0 or question_index >= len(questions):
         return jsonify({'status': 'error', 'message': 'Invalid question index'}), 400
 
     current_question = questions[question_index]
 
-    # Append the answer to the interview_history
-    # You might want to store more details here, e.g., timestamp, question_id if available
     DATABASE["INTERVIEWS"].update_one(
         {"_id": interview["_id"]},
         {
@@ -975,8 +977,6 @@ def submit_answer():
         }
     )
     return jsonify({'status': 'success', 'message': 'Answer submitted successfully'})
-
-
 
 @app.route('/end-interview', methods=['POST'])
 def end_interview():
@@ -1007,14 +1007,13 @@ def end_interview():
     interview_history = interview_doc.get("interview_history", [])
     behavior_analysis_snapshots = interview_doc.get("behavior_analysis", [])
 
-    # --- AGGREGATE BEHAVIORAL ANALYSIS FOR GEMINI PROMPT ---
+    # Aggregate behavioral analysis
     posture_counts = {}
     eye_contact_counts = {}
     gestures_counts = {}
     body_language_counts = {}
 
     for snapshot in behavior_analysis_snapshots:
-        # Count occurrences, excluding "Detected", "Error", "Undetermined", "N/A"
         posture = snapshot.get("posture_analysis")
         if posture and "Detected" not in posture and "Error" not in posture and "Undetermined" not in posture and "N/A" not in posture:
             posture_counts[posture] = posture_counts.get(posture, 0) + 1
@@ -1031,16 +1030,11 @@ def end_interview():
         if body_language and "Detected" not in body_language and "Error" not in body_language and "Undetermined" not in body_language and "N/A" not in body_language:
             body_language_counts[body_language] = body_language_counts.get(body_language, 0) + 1
 
-    # Determine most common states (with fallback if no valid counts)
     most_common_posture = max(posture_counts, key=posture_counts.get) if posture_counts else "Not observed"
     most_common_eye_contact = max(eye_contact_counts, key=eye_contact_counts.get) if eye_contact_counts else "Not observed"
     most_common_gestures = max(gestures_counts, key=gestures_counts.get) if gestures_counts else "Not observed"
     most_common_body_language = max(body_language_counts, key=body_language_counts.get) if body_language_counts else "Not observed"
 
-
-    # Build answer feedback string (if you want Gemini to analyze individual answers - currently it's just raw Q&A)
-    # If you want AI to give feedback on each answer, that logic needs to be in `submit_answer`
-    # For now, let's just pass Q&A history without individual AI feedback, as it's not generated per answer.
     all_q_and_a = "\n".join(
         f"Question: {entry.get('question')}\nAnswer: {entry.get('answer')}\n"
         for entry in interview_history
@@ -1090,8 +1084,6 @@ def end_interview():
             Generate the report in JSON format as specified above. Ensure all sections are filled concisely based *only* on the provided context. If a specific aspect is "Not observed" or "N/A" in the behavioral data, state that gracefully within the behavioural section.
         """)
         
-        print(f"DEBUG (end_interview): Gemini prompt:\n{prompt}") # Debug the prompt being sent
-
         gem_out = model.generate_content(prompt).text.strip()
 
         # Strip markdown code fences
@@ -1101,16 +1093,15 @@ def end_interview():
             gem_out = gem_out[3:]
         if gem_out.endswith("```"):
             gem_out = gem_out[:-3]
-        gem_out = gem_out.strip()
 
-        print(f"DEBUG (end_interview): Raw Gemini response (after stripping fences):\n{gem_out}") # Debug the raw response
+        gem_out = gem_out.strip()
 
         report_json = json.loads(gem_out)
         final_ai_report = report_json.get("overall", final_ai_report)
-        strengths_arr   = report_json.get("strengths", [])
-        weaknesses_arr  = report_json.get("weaknesses", [])
+        strengths_arr = report_json.get("strengths", [])
+        weaknesses_arr = report_json.get("weaknesses", [])
         behavioural_txt = report_json.get("behavioural", "")
-        language_txt    = report_json.get("language", "")
+        language_txt = report_json.get("language", "")
         suitability_txt = report_json.get("suitability", "Average")
 
         # Validate suitability
@@ -1119,21 +1110,21 @@ def end_interview():
             suitability_txt = "Average"
 
     except json.JSONDecodeError as e:
-        app.logger.error(f"Gemini final report JSON parsing failed: {e}. Raw response: {gem_out}")
-        final_ai_report  = "Interview completed. Report parsing error. Please check server logs."
-        strengths_arr    = ["Interview participation recorded"]
-        weaknesses_arr   = ["Detailed feedback temporarily unavailable due to parsing error"]
-        behavioural_txt  = "Behavioral analysis pending."
-        language_txt     = "Language feedback pending."
-        suitability_txt  = "Average"
+        app.logger.error(f"Gemini final report JSON parsing failed: {e}")
+        final_ai_report = "Interview completed. Report parsing error."
+        strengths_arr = ["Interview participation recorded"]
+        weaknesses_arr = ["Detailed feedback temporarily unavailable"]
+        behavioural_txt = "Behavioral analysis pending."
+        language_txt = "Language feedback pending."
+        suitability_txt = "Average"
     except Exception as e:
         app.logger.error(f"Gemini final report generation failed: {e}")
-        final_ai_report  = "Interview completed successfully. Analysis will be available shortly."
-        strengths_arr    = ["Interview participation recorded"]
-        weaknesses_arr   = ["Detailed feedback temporarily unavailable"]
-        behavioural_txt  = "Behavioral analysis pending."
-        language_txt     = "Language feedback pending."
-        suitability_txt  = "Average"
+        final_ai_report = "Interview completed successfully. Analysis will be available shortly."
+        strengths_arr = ["Interview participation recorded"]
+        weaknesses_arr = ["Detailed feedback temporarily unavailable"]
+        behavioural_txt = "Behavioral analysis pending."
+        language_txt = "Language feedback pending."
+        suitability_txt = "Average"
 
     # Update database
     result = DATABASE["INTERVIEWS"].update_one(
@@ -1162,9 +1153,6 @@ def end_interview():
         'redirect_url': url_for('view_report', identifier=identifier)
     })
 
-
-# --- NEW HISTORY ROUTES ---
-
 @app.route('/history')
 def history_list_page():
     if not session.get("is_authenticated"):
@@ -1172,35 +1160,29 @@ def history_list_page():
     
     user_id = session["user"]["user_id"]
     
-    # Fetch all completed interviews for the current user
-    # Sort by creation date, newest first
     completed_interviews = DATABASE["INTERVIEWS"].find(
         {"user_id": user_id, "is_completed": True}
-    ).sort("completed_at", -1) # Sort by completion time if available, otherwise created_at
+    ).sort("completed_at", -1)
 
-    # Prepare a list of dictionaries with relevant info for the template
     interviews_for_display = []
     for interview in completed_interviews:
-        # Determine the correct identifier field
         report_id = interview.get("interview_identifier") or interview.get("mock_interview_identifier")
         
-        # Format duration if available. Ensure it's a number first.
         duration_val = interview.get("duration")
         duration_str = "N/A"
         if isinstance(duration_val, (int, float)):
             minutes = int(duration_val // 60)
             seconds = int(duration_val % 60)
             duration_str = f"{minutes:02d}m {seconds:02d}s"
-        elif isinstance(duration_val, str) and duration_val.isdigit(): # Handle cases where it might be a string of digits
+        elif isinstance(duration_val, str) and duration_val.isdigit():
              minutes = int(duration_val) // 60
              seconds = int(duration_val) % 60
              duration_str = f"{minutes:02d}m {seconds:02d}s"
 
-
         interviews_for_display.append({
             "report_id": report_id,
             "type": interview.get("interview_type", "Mock Interview" if "mock_interview_identifier" in interview else "Custom Interview"),
-            "job_role": interview.get("job_description", "N/A")[:50] + "..." if interview.get("job_description") else "N/A", # Shorten job desc
+            "job_role": interview.get("job_description", "N/A")[:50] + "..." if interview.get("job_description") else "N/A",
             "date": interview.get("completed_at", interview.get("created_at")).strftime("%Y-%m-%d %H:%M") if interview.get("completed_at") or interview.get("created_at") else "N/A",
             "duration": duration_str
         })
@@ -1209,10 +1191,6 @@ def history_list_page():
 
 @app.route('/history/<identifier>')
 def view_report(identifier):
-    """
-    Renders the history.html page for a specific interview identifier.
-    The JavaScript within history.html will then call the /get-interview-report/<identifier> API.
-    """
     if not session.get("is_authenticated"):
         return redirect(url_for('index'))
     
@@ -1222,7 +1200,7 @@ def view_report(identifier):
             {"mock_interview_identifier": identifier}
         ],
         "user_id": session["user"]["user_id"],
-        "is_completed": True # Only show completed interviews in history
+        "is_completed": True
     })
     
     interview_data_for_template = None
@@ -1231,9 +1209,6 @@ def view_report(identifier):
     if not interview:
         message = 'Report not found, not completed yet, or unauthorized access.'
     else:
-        # If interview is found, you can pass relevant data to the template.
-        # This example just passes the whole interview object.
-        # You might want to filter sensitive data here before passing to frontend.
         interview_data_for_template = {
             "identifier": interview.get("interview_identifier") or interview.get("mock_interview_identifier"),
             "user_id": interview.get("user_id"),
@@ -1241,16 +1216,12 @@ def view_report(identifier):
             "is_completed": interview.get("is_completed", False),
             "questions": interview.get("questions", []),
             "interview_history": interview.get("interview_history", []),
-            # Add any other data from the interview object you want to display in history.html
         }
 
     return render_template('history.html', interview_data=interview_data_for_template, message=message)
 
 @app.route('/get-interview-report/<identifier>')
 def get_interview_report(identifier):
-    """
-    API endpoint to provide comprehensive interview report data.
-    """
     if not session.get("is_authenticated"):
         return jsonify({'status': 'error', 'message': 'User not authenticated'}), 401
 
@@ -1260,27 +1231,24 @@ def get_interview_report(identifier):
             {"mock_interview_identifier": identifier}
         ],
         "user_id": session["user"]["user_id"],
-        "is_completed": True # Ensure we only pull completed reports
+        "is_completed": True
     })
 
     if not interview_doc:
         return jsonify({'status': 'error', 'message': 'Report not found or not completed yet, or unauthorized access'}), 404
 
-    # --- Aggregate Behavioral Analysis from Snapshots ---
+    # Aggregate behavioral analysis
     behavior_snapshots = interview_doc.get("behavior_analysis", [])
     
-    # Initialize aggregators
     posture_counts = {}
     eye_contact_counts = {}
     gestures_counts = {}
     body_language_counts = {}
     
-    # For a synthesized overall impression/suggestions from behavioral snapshots
     overall_impressions_list = []
     suggestions_list = []
 
     for snapshot in behavior_snapshots:
-        # Count occurrences for "most common" analysis
         posture = snapshot.get("posture_analysis")
         if posture and "Detected" not in posture and "Error" not in posture and "Undetermined" not in posture and "N/A" not in posture:
             posture_counts[posture] = posture_counts.get(posture, 0) + 1
@@ -1297,7 +1265,6 @@ def get_interview_report(identifier):
         if body_language and "Detected" not in body_language and "Error" not in body_language and "Undetermined" not in body_language and "N/A" not in body_language:
             body_language_counts[body_language] = body_language_counts.get(body_language, 0) + 1
         
-        # Collect overall impressions and suggestions from each snapshot
         overall_impression_snap = snapshot.get("overall_impression")
         if overall_impression_snap and "Processing" not in overall_impression_snap and "Error" not in overall_impression_snap and "Undetermined" not in overall_impression_snap and "N/A" not in overall_impression_snap:
             overall_impressions_list.append(overall_impression_snap)
@@ -1306,29 +1273,24 @@ def get_interview_report(identifier):
         if suggestions_snap and "Processing" not in suggestions_snap and "Error" not in suggestions_snap and "Undetermined" not in suggestions_snap and "N/A" not in suggestions_snap:
             suggestions_list.append(suggestions_snap)
 
-    # Determine most common states (with fallback if no valid counts)
     most_common_posture = max(posture_counts, key=posture_counts.get) if posture_counts else "Not observed"
     most_common_eye_contact = max(eye_contact_counts, key=eye_contact_counts.get) if eye_contact_counts else "Not observed"
     most_common_gestures = max(gestures_counts, key=gestures_counts.get) if gestures_counts else "Not observed"
     most_common_body_language = max(body_language_counts, key=body_language_counts.get) if body_language_counts else "Not observed"
 
-    # Synthesize overall impression and suggestions from collected snapshots
     synthesized_overall_impression = " ".join(list(set(overall_impressions_list))) if overall_impressions_list else "Overall impression not available from real-time analysis."
-    synthesized_suggestions = list(set(suggestions_list)) # Use set to remove duplicates
+    synthesized_suggestions = list(set(suggestions_list))
 
-    # --- Prepare Response Metrics ---
-    total_time_taken = interview_doc.get("duration", 0) 
-    # IMPORTANT FIX: Ensure total_time_taken is a number
+    total_time_taken = interview_doc.get("duration", 0)
     if isinstance(total_time_taken, str):
         try:
             total_time_taken = float(total_time_taken)
         except ValueError:
-            total_time_taken = 0.0 # Default if it's a non-numeric string
+            total_time_taken = 0.0
             
     num_questions = len(interview_doc.get("interview_history", []))
     avg_time_per_answer = f"{(total_time_taken / num_questions):.1f}s" if num_questions > 0 else "N/A"
 
-    # Calculate overall score based on AI suitability
     suitability_score_map = {
         "Poor": 2,
         "Below Average": 4,
@@ -1338,7 +1300,6 @@ def get_interview_report(identifier):
     }
     calculated_score = suitability_score_map.get(interview_doc.get("ai_suitability", "Average"), 6)
 
-    # --- Construct the final JSON response using structured AI data ---
     report_data = {
         "interview_id": identifier,
         "job_role": interview_doc.get("job_description", "N/A")[:100] + ("..." if len(interview_doc.get("job_description", "")) > 100 else ""),
@@ -1347,7 +1308,6 @@ def get_interview_report(identifier):
         "max_score": 10,
         "summary": interview_doc.get("ai_report", "Interview completed successfully."),
         
-        # Use AI-generated structured data
         "strengths": interview_doc.get("ai_strengths", ["Interview participation", "Professional demeanor"]),
         "weaknesses": interview_doc.get("ai_weaknesses", ["Areas for improvement identified"]),
 
@@ -1380,16 +1340,13 @@ def get_interview_report(identifier):
         
         "suggestions_for_improvement": interview_doc.get("ai_weaknesses", ["Continue developing professional skills", "Practice interview techniques"]),
         
-        # Keep these for backward compatibility
         "full_ai_report_text": interview_doc.get("ai_report", "No comprehensive report generated yet."),
         "interview_history": interview_doc.get("interview_history", [])
     }
 
     return jsonify(report_data)
 
-
-# Route for interview results page (if you want a separate page to show the final report)
-@app.route('/interview-results/')
+@app.route('/interview-results/<identifier>')
 def interview_results(identifier):
     if not session.get("is_authenticated"):
         return redirect(url_for('index'))
@@ -1406,7 +1363,6 @@ def interview_results(identifier):
     if not interview:
         return jsonify({'status': 'error', 'message': 'Interview results not found.'}), 404
 
-    # Compute formatted duration (mm:ss)
     duration_val = interview.get("duration", 0)
     minutes = int(duration_val // 60)
     seconds = int(duration_val % 60)
