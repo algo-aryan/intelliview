@@ -44,8 +44,9 @@
               <span>Profile</span>
             </a>
             {% else %}
-            <div id="g_id_onload" data-client_id="688599391698-e5vvucpglgu75j68dsmuesjtpvps9jjt.apps.googleusercontent.com" data-callback="handleCredentialResponse"
-              data-auto_prompt="false">
+            <div id="g_id_onload"
+              data-client_id="688599391698-e5vvucpglgu75j68dsmuesjtpvps9jjt.apps.googleusercontent.com"
+              data-callback="handleCredentialResponse" data-auto_prompt="false">
             </div>
             <div class="g_id_signin" data-type="standard" data-shape="pill" data-theme="outline"
               data-text="sign_in_with" data-size="medium" data-logo_alignment="left">
@@ -81,8 +82,7 @@
 
       <div class="answer-container">
         <div class="answer-box">
-          <textarea id="answer" rows="4" placeholder="Type your answer here"
-            class="form-control"></textarea>
+          <textarea id="answer" rows="4" placeholder="Type your answer here" class="form-control"></textarea>
           <div class="button-container">
             <button class="end-button btn btn--secondary" id="end-interview">End Interview</button>
             <button id="submit-answer" class="submit-button btn btn--primary">Submit</button>
@@ -306,69 +306,59 @@
 
     // Event listener for the End Interview button
     endInterviewButton.addEventListener('click', async () => {
-      if (isListening) { // If speech recognition is active, stop it
+      if (isListening) {
         recognition.stop();
         isListening = false;
       }
 
-      const userAnswer = answerTextarea.value.trim(); // Get the answer for the very last question
-
+      const userAnswer = answerTextarea.value.trim();
       if (userAnswer === "") {
         alert("Please type your answer for the last question before ending the interview.");
         return;
       }
 
-      // First, submit the answer for the last question
+      // Change button text and disable button
+      endInterviewButton.disabled = true;
+      const originalText = endInterviewButton.textContent;
+      endInterviewButton.textContent = 'Loading…';
+
       try {
+        // Submit last answer
         const submitLastAnswerResponse = await fetch('/submit-answer', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             interview_id: identifier,
             question_index: currentQuestionIndex,
             user_answer: userAnswer
-          }),
+          })
         });
+        if (!submitLastAnswerResponse.ok) throw await submitLastAnswerResponse.json();
 
-        const submitLastAnswerData = await submitLastAnswerResponse.json();
+        clearInterval(timerInterval);
 
-        if (!submitLastAnswerResponse.ok) {
-          console.error('Error submitting last answer:', submitLastAnswerData.message);
-          alert('Failed to submit last answer: ' + submitLastAnswerData.message);
-          return; // Stop here if last answer submission fails
-        }
-        console.log('Last answer submitted successfully:', submitLastAnswerData.message);
-        answerTextarea.value = ''; // Clear the textarea
-
-        // Now, make the /end-interview call to mark it as completed and potentially generate final report
-        clearInterval(timerInterval); // Stop the timer
-
+        // End interview
         const endInterviewResponse = await fetch('/end-interview', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            interview_history: interviewHistory, // If this is for client-side display, otherwise remove
             identifier: identifier,
-            behavior_analysis: interviewBehavior,
-            timer: timerDisplay.textContent
+            timer: Math.floor((Date.now() - startTime) / 1000)
           })
         });
+        if (!endInterviewResponse.ok) throw await endInterviewResponse.json();
 
-        if (endInterviewResponse.ok) {
-          console.log("Interview marked as completed successfully. Redirecting to report...");
-          window.location.href = `/history/${identifier}`;
-        } else {
-          const endInterviewData = await endInterviewResponse.json();
-          console.error('Failed to end interview:', endInterviewData.message);
-          alert('Failed to end interview: ' + endInterviewData.message);
-        }
-      } catch (error) {
-        console.error('Network error during end interview process:', error);
-        alert('A network error occurred while ending the interview.');
+        window.location.href = `/history/${identifier}`;
+      } catch (err) {
+        console.error('Error during end interview process:', err);
+        alert('Failed to end interview: ' + (err.message || JSON.stringify(err)));
+      } finally {
+        // Restore button text and re-enable if still on page
+        endInterviewButton.textContent = originalText;
+        endInterviewButton.disabled = false;
       }
     });
+
 
 
     function renderFeedback() {

@@ -285,7 +285,13 @@ def index():
 def profile():
     if not session.get("is_authenticated"):
         return redirect(url_for('index'))
-    return render_template("profile.html")
+
+    # Fetch full user document from DB
+    user_doc = DATABASE["USERS"].find_one({"user_id": session["user"]["user_id"]})
+    user_info = user_doc.get("user_info", {}) if user_doc else {}
+
+    return render_template("profile.html", user_info=user_info)
+
 
 @app.route("/interview")
 def interview():
@@ -635,29 +641,58 @@ def logout():
 def settings():
     if not session.get("is_authenticated"):
         return redirect(url_for("index"))
+
     user_id = session["user"]["user_id"]
-    user = DATABASE["USERS"].find_one({"user_id": user_id})
+    # Fetch the full user_info subdocument
+    user_doc = DATABASE["USERS"].find_one(
+        {"user_id": user_id},
+        {"user_info": 1}
+    )
+    user_info = user_doc.get("user_info", {}) if user_doc else {}
     message = None
+
     if request.method == 'POST':
+        # Pull fields from the form
         name = request.form.get('name')
         username = request.form.get('username')
         email = request.form.get('email')
         avatar_url = request.form.get('avatar_url')
+        about = request.form.get('about')
+        skills_raw = request.form.get('skills', '').strip()
+        # Convert comma-separated skills into a list, if provided
+        skills = [s.strip() for s in skills_raw.split(',')] if skills_raw else []
+
+        # Build the update dict dynamically
+        update_fields = {
+            "user_info.name": name,
+            "user_info.username": username,
+            "user_info.email": email,
+            "user_info.avatar_url": avatar_url
+        }
+        if about is not None:
+            update_fields["user_info.about"] = about
+        if skills_raw != "":
+            update_fields["user_info.skills"] = skills
+
         DATABASE["USERS"].update_one(
             {"user_id": user_id},
-            {"$set": {
-                "user_info.name": name,
-                "user_info.username": username,
-                "user_info.email": email,
-                "user_info.avatar_url": avatar_url
-            }}
+            {"$set": update_fields}
         )
+
+        # Update session for immediate UI reflect
         session["user"]["name"] = name
         session["user"]["username"] = username
         session["user"]["avatar_url"] = avatar_url
+
         message = "Settings updated successfully!"
-        user = DATABASE["USERS"].find_one({"user_id": user_id})
-    return render_template('settings.html', user=user["user_info"] if user else None, message=message)
+        # Re-fetch to get the latest user_info
+        user_doc = DATABASE["USERS"].find_one(
+            {"user_id": user_id},
+            {"user_info": 1}
+        )
+        user_info = user_doc.get("user_info", {}) if user_doc else {}
+
+    return render_template('settings.html', user_info=user_info, message=message)
 
 @app.route('/upload-screencapture', methods=['POST'])
 def upload_screencapture():
@@ -776,12 +811,16 @@ def upload_screencapture():
             raise ValueError("Could not decode image data")
 
         # Detect emotion
+        # Detect emotion
         emotions = emotion_detector.detect_emotions(image_cv)
         if emotions:
-            top_emotion, _ = emotion_detector.top_emotion(image_cv)
-            analysis_report["emotion_analysis"] = top_emotion.capitalize()
+            # pick the highest‐scoring emotion from FER's raw output
+            emo_dict = emotions[0]['emotions']
+            best = max(emo_dict, key=emo_dict.get)
+            analysis_report["emotion_analysis"] = best.capitalize()
         else:
             analysis_report["emotion_analysis"] = "No face detected for emotion"
+
 
         # Process pose
         image_rgb = cv2.cvtColor(image_cv, cv2.COLOR_BGR2RGB)
@@ -897,15 +936,18 @@ def upload_screencapture():
             elif line.startswith("Eye Contact:"):
                 current_section = "Eye Contact"
                 sections[current_section] += line[len("Eye Contact:"):].strip() + " "
+            elif line.startswith("Body Language:"):
+                current_section = "Body Language"
+                sections[current_section] += line[len("Body Language:"):].strip() + " "
             elif line.startswith("Gestures:"):
                 current_section = "Gestures"
                 sections[current_section] += line[len("Gestures:"):].strip() + " "
             elif line.startswith("Overall Impression:"):
                 current_section = "Overall Impression"
                 sections[current_section] += line[len("Overall Impression:"):].strip() + " "
-            elif line.startswith("Suggestions for Improvement:"):
+            elif line.startswith("Suggestions:"):
                 current_section = "Suggestions for Improvement"
-                sections[current_section] += line[len("Suggestions for Improvement:"):].strip() + " "
+                sections[current_section] += line[len("Suggestions:"):].strip() + " "
             elif current_section:
                 sections[current_section] += line + " "
         
@@ -915,7 +957,7 @@ def upload_screencapture():
         analysis_report["gestures_analysis"] = sections["Gestures"].strip() if sections["Gestures"] else analysis_report["gestures_analysis"]
         analysis_report["overall_impression"] = sections["Overall Impression"].strip() if sections["Overall Impression"] else analysis_report["overall_impression"]
         analysis_report["suggestions_for_improvement"] = sections["Suggestions for Improvement"].strip() if sections["Suggestions for Improvement"] else analysis_report["suggestions_for_improvement"]
-
+        analysis_report["body_language_analysis"] = sections["Body Language"].strip() if sections["Body Language"] else detected_body_language_type
         analysis_report["posture_analysis"] = detected_posture
 
     except Exception as e:
@@ -986,10 +1028,16 @@ def end_interview():
     data = request.json
     identifier = data.get('identifier')
     timer = data.get('timer')
+    print(f"DEBUG: Timer received: {timer}, type: {type(timer)}")  # Add debugging
     try:
-        timer = float(timer)
-    except (TypeError, ValueError):
+        if timer is None:
+            timer = 0.0
+        else:
+            timer = float(timer)
+    except (TypeError, ValueError) as e:
+        print(f"DEBUG: Timer conversion error: {e}")
         timer = 0.0
+
 
     if not identifier:
         return jsonify({'status': 'error', 'message': 'Interview ID not provided'}), 400
@@ -1084,15 +1132,10 @@ def end_interview():
             Generate the report in JSON format as specified above. Ensure all sections are filled concisely based *only* on the provided context. If a specific aspect is "Not observed" or "N/A" in the behavioral data, state that gracefully within the behavioural section.
         """)
         
-        gem_out = model.generate_content(prompt).text.strip()
-
-        # Strip markdown code fences
-        if gem_out.startswith("```json"):
-            gem_out = gem_out[7:]
-        if gem_out.startswith("```"):
-            gem_out = gem_out[3:]
-        if gem_out.endswith("```"):
-            gem_out = gem_out[:-3]
+        gem_out = model.generate_content(
+            prompt,
+            generation_config={"response_mime_type": "application/json"}
+        ).text.strip()
 
         gem_out = gem_out.strip()
 
