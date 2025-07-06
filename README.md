@@ -180,21 +180,15 @@ For queries or contributions, reach out via:
 
 ## 👥 Team Members
 
-- **Tanisha Khanna**  
-  🔗 [GitHub](https://github.com/tanisha495)  
-  🔗 [LinkedIn](https://www.linkedin.com/in/tanisha-khanna-432672323/)
+- **Tanisha Khanna**  🔗 [GitHub](https://github.com/tanisha495)  🔗 [LinkedIn](https://www.linkedin.com/in/tanisha-khanna-432672323/)
 
-- **Arnav Bansal**  
-  🔗 [GitHub](https://github.com/Krypto-Knight-05)  
-  🔗 [LinkedIn](https://www.linkedin.com/in/arnav-bansal-175968314/)
+- **Arnav Bansal**  🔗 [GitHub](https://github.com/Krypto-Knight-05)  🔗 [LinkedIn](https://www.linkedin.com/in/arnav-bansal-175968314/)
 
-- **Tushti Gupta**  
-  🔗 [GitHub](https://github.com/Tushti11)  
-  🔗 [LinkedIn](https://www.linkedin.com/in/tushti-gupta-aa761323b/)
+- **Tushti Gupta**  🔗 [GitHub](https://github.com/Tushti11)  🔗 [LinkedIn](https://www.linkedin.com/in/tushti-gupta-aa761323b/)
 
 ---
 
 ## 📃 License
 
 This project is licensed under the **MIT License**.  
-See the full [LICENSE.txt](LICENSE.txt) for details.
+See the full [LICENSE](LICENSE) for details.
