@@ -321,7 +321,7 @@ def create_interview():
         return jsonify({'status': 'error', 'message': 'Job description or resume not provided'}), 400
 
     # Fetch resume summary via LLM
-    model = genai.GenerativeModel('gemini-2.5-flash-preview-04-17')
+    model = genai.GenerativeModel(model_name="models/gemini-2.5-flash")
     prompt_resume_summary = f"""
     Carefully review the attached resume file. Provide a thorough, structured, and objective detailed summary of the candidate's background, including:
     - Contact information (if present)
@@ -435,7 +435,7 @@ def new_mock_interview():
     
     resume_summary = user_info['user_info']['resume_summary']
     
-    model = genai.GenerativeModel('gemini-2.5-flash-preview-04-17')
+    model = genai.GenerativeModel(model_name="models/gemini-2.5-flash")
     prompt = f"""
     Generate 10 mock interview questions based on the following resume summary:
     {resume_summary}
@@ -532,7 +532,7 @@ def parse_resume():
                 "mime_type": mime_type,
                 "data": file_content
             }
-            model = genai.GenerativeModel('gemini-2.5-flash-preview-04-17')
+            model = genai.GenerativeModel(model_name="models/gemini-2.5-flash")
 
             prompt = """
             Carefully review the attached resume file. Provide a thorough, structured, and objective summary of the candidate's background, including:
@@ -891,7 +891,7 @@ def upload_screencapture():
 
     # Generate detailed feedback using Gemini
     try:
-        model = genai.GenerativeModel('gemini-2.5-flash-preview-04-17')
+        model = genai.GenerativeModel(model_name="models/gemini-2.5-flash")
         
         gemini_input_data = f"""
         Provide concise feedback under 3 sentences each, bullet-pointed, on these items:
@@ -1096,7 +1096,7 @@ def end_interview():
     suitability_txt = ""
 
     try:
-        model = genai.GenerativeModel('gemini-2.5-flash-preview-04-17')
+        model = genai.GenerativeModel(model_name="models/gemini-2.5-flash")
         prompt = textwrap.dedent(f"""
             You are an AI interview assessor providing a comprehensive and concise report. Return ONLY valid JSON with these exact keys:
             {{
